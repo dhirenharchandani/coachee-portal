@@ -1,0 +1,1442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Inner Game Coaching</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  * { -webkit-tap-highlight-color: transparent; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; margin: 0; }
+  .font-serif { font-family: "Iowan Old Style", "Palatino", "Georgia", serif; }
+
+  /* Brand font */
+  @font-face {
+    font-family: "Moonshot";
+    src: url("data/fonts/Moonshot-Oblique.otf") format("opentype");
+    font-weight: normal;
+    font-style: italic;
+  }
+  .font-brand { font-family: "Moonshot", "Iowan Old Style", serif; font-style: italic; }
+
+  /* Logo lockup: DH | MASTER YOUR INNER GAME */
+  .logo-lockup { display: inline-flex; align-items: stretch; gap: 14px; color: var(--text); }
+  .logo-lockup .dh-mark { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
+  .logo-lockup .dh { font-family: "Moonshot", serif; font-style: italic; font-weight: normal; line-height: 0.9; letter-spacing: -0.02em; }
+  .logo-lockup .url { font-size: 8px; letter-spacing: 0.1em; opacity: 0.7; margin-top: 4px; line-height: 1.1; }
+  .logo-lockup .divider { width: 1px; background: currentColor; opacity: 0.4; align-self: stretch; }
+  .logo-lockup .myig { font-weight: 900; line-height: 0.95; letter-spacing: -0.01em; align-self: center; text-transform: uppercase; }
+  .logo-lockup .myig .row { display: block; }
+  .logo-lockup-sm .dh { font-size: 26px; }
+  .logo-lockup-sm .url { font-size: 6px; margin-top: 2px; }
+  .logo-lockup-sm .myig { font-size: 11px; }
+  .logo-lockup-lg .dh { font-size: 56px; }
+  .logo-lockup-lg .url { font-size: 9px; margin-top: 6px; }
+  .logo-lockup-lg .myig { font-size: 22px; }
+
+  /* Theme variables — Master Your Inner Game brand palette */
+  body[data-theme="dark"] {
+    --bg: #14111e; --surface: #1f1a2e; --surface-2: #181425; --border: #3d3651;
+    --text: #ede9f5; --text-dim: #a39bbe; --text-faint: #6f6884;
+    --primary: #a78bfa; --primary-soft: rgba(167,139,250,0.14);
+    --secondary: #f97316;
+    --shadow: 0 1px 0 rgba(255,255,255,0.04) inset;
+  }
+  body[data-theme="light"] {
+    --bg: #faf8fc; --surface: #ffffff; --surface-2: #f3eff8; --border: #e4dff0;
+    --text: #1c1729; --text-dim: #5b5470; --text-faint: #a09aab;
+    --primary: #7e3af2; --primary-soft: rgba(126,58,242,0.07);
+    --secondary: #ea580c;
+    --shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  body { background: var(--bg); color: var(--text); transition: background 0.2s, color 0.2s; }
+
+  .surface { background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); }
+  .surface-2 { background: var(--surface-2); border: 1px solid var(--border); }
+  .text-primary { color: var(--primary); }
+  .text-secondary { color: var(--secondary); }
+  .text-dim { color: var(--text-dim); }
+  .text-faint { color: var(--text-faint); }
+  .border-default { border-color: var(--border); }
+  .bg-primary-soft { background: var(--primary-soft); }
+  .btn-primary { background: var(--primary); color: white; }
+
+  /* Sidebar */
+  .nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 14px; border-radius: 8px;
+    color: var(--text-dim); cursor: pointer; font-size: 14px;
+    transition: all 0.12s; user-select: none;
+  }
+  .nav-item:hover { background: var(--surface-2); color: var(--text); }
+  .nav-item.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+  .nav-item .icon { width: 18px; display: inline-flex; justify-content: center; }
+  .nav-section { padding: 16px 14px 6px; font-size: 10px; letter-spacing: 0.18em; color: var(--text-faint); font-weight: 600; }
+
+  /* Mobile bottom nav */
+  .mobile-bottom-nav { display: none !important; }
+  @media (max-width: 768px) {
+    .desktop-sidebar { display: none !important; }
+    .mobile-bottom-nav { display: flex !important; }
+    .main-content { padding-bottom: 80px !important; }
+  }
+  .mobile-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 6px 2px; font-size: 10px; color: var(--text-dim); cursor: pointer; }
+  .mobile-tab.active { color: var(--primary); }
+
+  /* Markdown */
+  .prose { color: var(--text); line-height: 1.7; max-width: 68ch; }
+  .prose h1, .prose h2, .prose h3 { color: var(--text); font-weight: 700; line-height: 1.3; margin-top: 2em; margin-bottom: 0.5em; }
+  .prose h1 { font-size: 1.6em; }
+  .prose h2 { font-size: 1.3em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+  .prose h3 { font-size: 1.1em; }
+  .prose p { margin: 0.9em 0; }
+  .prose strong { color: var(--text); font-weight: 600; }
+  .prose em { color: var(--secondary); font-style: italic; }
+  .prose a { color: var(--primary); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  .prose ul, .prose ol { margin: 0.8em 0; padding-left: 1.4em; }
+  .prose li { margin: 0.3em 0; }
+  .prose blockquote { border-left: 3px solid var(--secondary); padding-left: 1em; margin: 1em 0; color: var(--text-dim); font-style: italic; }
+  .prose hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+  .prose code { background: var(--surface-2); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  .prose .session-meta { color: var(--text-dim); font-size: 0.95em; margin-bottom: 1.5em; }
+
+  /* Editorial reading */
+  .reading { font-family: "Iowan Old Style", "Palatino", "Georgia", serif; font-size: 17px; line-height: 1.75; }
+
+  /* Animations */
+  .fade-in { animation: fadeIn 0.25s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  /* Search overlay */
+  .search-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 50; display: flex; align-items: flex-start; justify-content: center; padding-top: 10vh; }
+  body[data-theme="light"] .search-backdrop { background: rgba(0,0,0,0.3); }
+
+  /* Login */
+  .login-bg { background: radial-gradient(circle at 30% 20%, rgba(96,165,250,0.08), transparent 60%), radial-gradient(circle at 70% 80%, rgba(217,119,6,0.06), transparent 60%), var(--bg); }
+
+  /* Inputs */
+  .input { width: 100%; padding: 10px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 14px; outline: none; transition: border 0.15s; }
+  .input:focus { border-color: var(--primary); }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
+  /* Action item checkbox */
+  .check { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--border); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: all 0.15s; }
+  .check.done { background: var(--primary); border-color: var(--primary); color: white; }
+  .check.ongoing { border-color: var(--secondary); background: rgba(217,119,6,0.15); }
+  .check:hover { border-color: var(--primary); }
+
+  /* Pulse for new badge */
+  .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--secondary); display: inline-block; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(1.15); } }
+
+  /* Hide on mobile / desktop helpers (Tailwind-safe) */
+  .hide-mobile { display: revert; }
+  .hide-desktop { display: none; }
+  @media (max-width: 768px) {
+    .hide-mobile { display: none !important; }
+    .hide-desktop { display: revert !important; }
+  }
+</style>
+</head>
+<body data-theme="dark">
+
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+/* =====================================================================
+   CONFIG — Supabase
+   ===================================================================== */
+const SUPABASE_URL = "https://diiazuiyxxcecjnjmirt.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_xEPPs63vVVCELKyb0WrDtQ_qAAnvErH";
+const USE_REAL_AUTH = !!(SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase);
+const sb = USE_REAL_AUTH ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+
+/* =====================================================================
+   DATA LOAD — Supabase or fallback to embedded JSON
+   ===================================================================== */
+function useCoacheeData(authedEmail) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (!authedEmail) return;
+    if (sb) {
+      sb.from('coachees').select('data').ilike('email', authedEmail).single()
+        .then(({ data: row, error: err }) => {
+          if (err) {
+            // PGRST116 = no rows = no dashboard for this email
+            if (err.code === 'PGRST116') {
+              setError('NO_DASHBOARD');
+            } else {
+              setError(err.message);
+            }
+            return;
+          }
+          setData(row.data);
+        });
+    } else {
+      // Fallback (no Supabase configured): read embedded JSON
+      fetch('data/anshuman.json')
+        .then(r => { if (!r.ok) throw new Error('Failed to load coachee data'); return r.json(); })
+        .then(setData)
+        .catch(e => setError(e.message));
+    }
+  }, [authedEmail]);
+  return { data, error };
+}
+
+/* =====================================================================
+   THEME + ACTION ITEM STATE (localStorage)
+   ===================================================================== */
+function useTheme() {
+  const [theme, setTheme] = useState(() => localStorage.getItem('ig-theme') || 'dark');
+  useEffect(() => {
+    document.body.dataset.theme = theme;
+    localStorage.setItem('ig-theme', theme);
+  }, [theme]);
+  return [theme, () => setTheme(theme === 'dark' ? 'light' : 'dark')];
+}
+
+function useViewedSessions(coacheeId, allSessionIds) {
+  const key = `ig-viewed-sessions-${coacheeId}`;
+  const initKey = `ig-viewed-init-${coacheeId}`;
+  const [viewed, setViewed] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(key) || '[]');
+      // First-load grace: mark all existing sessions as viewed so no false badges
+      if (!localStorage.getItem(initKey)) {
+        localStorage.setItem(key, JSON.stringify(allSessionIds));
+        localStorage.setItem(initKey, '1');
+        return new Set(allSessionIds);
+      }
+      return new Set(stored);
+    } catch { return new Set(allSessionIds); }
+  });
+  const markViewed = useCallback((sessionId) => {
+    setViewed(prev => {
+      if (prev.has(sessionId)) return prev;
+      const next = new Set(prev); next.add(sessionId);
+      localStorage.setItem(key, JSON.stringify([...next]));
+      return next;
+    });
+  }, [key]);
+  const unviewedIds = useMemo(() => allSessionIds.filter(id => !viewed.has(id)), [allSessionIds, viewed]);
+  return { viewed, markViewed, unviewedCount: unviewedIds.length, unviewedIds };
+}
+
+function useActionStatus(coacheeId, baseItems) {
+  const key = `ig-actions-${coacheeId}`;
+  const [overrides, setOverrides] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; }
+  });
+  useEffect(() => { localStorage.setItem(key, JSON.stringify(overrides)); }, [overrides, key]);
+  const items = useMemo(() => baseItems.map(it => ({ ...it, status: overrides[it.id] || it.status })), [baseItems, overrides]);
+  const cycleStatus = (id) => {
+    const cur = items.find(i => i.id === id)?.status;
+    const next = cur === 'pending' ? 'ongoing' : cur === 'ongoing' ? 'done' : 'pending';
+    setOverrides({ ...overrides, [id]: next });
+  };
+  return [items, cycleStatus];
+}
+
+/* =====================================================================
+   ROUTING (hash-based)
+   ===================================================================== */
+function useHashRoute() {
+  const [route, setRoute] = useState(() => window.location.hash.slice(1) || '/overview');
+  useEffect(() => {
+    const onHash = () => setRoute(window.location.hash.slice(1) || '/overview');
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const go = (path) => { window.location.hash = path; };
+  return [route, go];
+}
+
+/* =====================================================================
+   AUTH
+   ===================================================================== */
+function useAuth() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!sb) {
+      // Fallback soft auth for preview-without-keys
+      const fake = sessionStorage.getItem('ig-authed-email');
+      if (fake) setSession({ user: { email: fake } });
+      setLoading(false);
+      return;
+    }
+    sb.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+    const { data: { subscription } } = sb.auth.onAuthStateChange((_event, session) => setSession(session));
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const sendMagicLink = async (email) => {
+    if (!sb) {
+      // Fallback for preview-mode
+      sessionStorage.setItem('ig-authed-email', email);
+      setSession({ user: { email } });
+      return { ok: true, devNote: 'Setup mode — signed in directly without email.' };
+    }
+    const redirectTo = window.location.origin + window.location.pathname;
+    const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo } });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  };
+
+  const signOut = async () => {
+    if (sb) await sb.auth.signOut();
+    sessionStorage.removeItem('ig-authed-email');
+    setSession(null);
+    window.location.hash = '/overview';
+  };
+
+  return { session, loading, sendMagicLink, signOut, authedEmail: session?.user?.email || null };
+}
+
+/* =====================================================================
+   SEARCH INDEX
+   ===================================================================== */
+function buildSearchIndex(data) {
+  if (!data) return [];
+  const idx = [];
+  data.sessions.forEach(s => {
+    idx.push({ type: 'session', label: s.title, sub: s.displayDate + ' · ' + s.theme, route: '/session/' + s.id, body: (s.summaryMd || '') + ' ' + (s.keyTakeaway || '') });
+  });
+  data.wins.forEach((w, i) => idx.push({ type: 'win', label: w.title, sub: 'Win', route: '/growth#wins', body: w.body }));
+  data.growthEdges.forEach((g, i) => idx.push({ type: 'edge', label: g.title, sub: 'Growth Edge', route: '/growth#edges', body: g.body }));
+  data.quotes.forEach((q, i) => idx.push({ type: 'quote', label: q.text, sub: q.attribution, route: '/growth#quotes', body: q.text }));
+  data.patterns.forEach((p) => idx.push({ type: 'pattern', label: p.label, sub: 'Recurring Pattern', route: '/growth#patterns', body: p.label }));
+  data.actionItems.forEach(a => idx.push({ type: 'action', label: a.text, sub: 'Action Item · ' + a.status, route: '/actions', body: a.text + ' ' + (a.notes || '') }));
+  data.nextQuarter.forEach(p => idx.push({ type: 'priority', label: p.title, sub: 'Q3 Priority', route: '/next', body: p.body }));
+  data.resources.forEach(folder => folder.items.forEach(item => idx.push({ type: 'resource', label: item.title, sub: folder.folder, route: '/resources#' + item.id, body: item.description })));
+  return idx;
+}
+
+function search(query, index) {
+  if (!query || query.trim().length < 2) return [];
+  const q = query.toLowerCase();
+  return index
+    .map(item => {
+      const labelHit = item.label.toLowerCase().includes(q) ? 2 : 0;
+      const bodyHit = item.body.toLowerCase().includes(q) ? 1 : 0;
+      return { ...item, score: labelHit + bodyHit };
+    })
+    .filter(i => i.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 12);
+}
+
+/* =====================================================================
+   MARKDOWN
+   ===================================================================== */
+function Markdown({ source }) {
+  const html = useMemo(() => marked.parse(source || ''), [source]);
+  return <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+/* =====================================================================
+   COMPONENTS — small
+   ===================================================================== */
+function StatBlock({ value, label, accent }) {
+  return (
+    <div className="surface rounded-xl px-5 py-4 min-w-[100px] text-center">
+      <div className="text-3xl font-bold" style={{ color: accent || 'var(--text)' }}>{value}</div>
+      <div className="text-[10px] tracking-[0.18em] text-faint mt-1 uppercase">{label}</div>
+    </div>
+  );
+}
+
+function SectionHeading({ children, sub }) {
+  return (
+    <div className="mb-5">
+      <h2 className="text-xl font-bold flex items-center gap-3" style={{ borderLeft: '3px solid var(--primary)', paddingLeft: '12px' }}>{children}</h2>
+      {sub && <p className="text-faint text-sm mt-1.5 ml-[15px]">{sub}</p>}
+    </div>
+  );
+}
+
+function CTACard({ icon, title, body, cta, onClick }) {
+  return (
+    <button onClick={onClick} className="surface rounded-xl p-5 text-left hover:opacity-90 transition-opacity flex flex-col h-full" style={{ borderLeft: '3px solid var(--secondary)' }}>
+      <div className="text-2xl mb-2">{icon}</div>
+      <h3 className="font-semibold mb-1">{title}</h3>
+      <p className="text-faint text-sm reading mb-3 flex-1" style={{ fontSize: '13px' }}>{body}</p>
+      <span className="text-primary text-sm font-medium">{cta}</span>
+    </button>
+  );
+}
+
+function HeroCTAs({ onNav, data, actionItems }) {
+  const scoredKey = `ig-scorecard-updated-${data.id}`;
+  const lastScored = localStorage.getItem(scoredKey);
+  const daysSinceScored = lastScored ? Math.floor((Date.now() - parseInt(lastScored)) / 86400000) : null;
+  const scoredBody = daysSinceScored == null ? "First self-assessment pending." : daysSinceScored === 0 ? "Updated today." : `Last updated ${daysSinceScored} day${daysSinceScored !== 1 ? 's' : ''} ago.`;
+
+  // Last session with a recap
+  const lastSession = useMemo(() => [...data.sessions].reverse().find(s => s.summaryMd && !s.summaryMd.startsWith('_No recap')), [data]);
+  const lastActions = useMemo(() => actionItems.filter(a => a.sessionId === lastSession?.id), [actionItems, lastSession]);
+  const open = lastActions.filter(a => a.status !== 'done').length;
+  const done = lastActions.filter(a => a.status === 'done').length;
+  const total = lastActions.length;
+  const actionsBody = total === 0
+    ? "No commitments yet from your most recent session."
+    : open === 0
+      ? `All ${total} commitments closed. Movement.`
+      : `${open} open · ${done} done · ${total} total. From ${lastSession.displayDate}.`;
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <CTACard
+        icon="✅"
+        title="Action items from your last session"
+        body={actionsBody}
+        cta="Track your progress →"
+        onClick={() => onNav('/actions')}
+      />
+      <CTACard
+        icon="📊"
+        title="Rate yourself on the scorecard"
+        body={scoredBody}
+        cta="Update your scores →"
+        onClick={() => onNav('/scorecard')}
+      />
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, body }) {
+  return (
+    <div className="surface rounded-2xl p-10 text-center">
+      <div className="text-4xl mb-4 opacity-50">{icon}</div>
+      <h3 className="font-semibold text-lg mb-2">{title}</h3>
+      <p className="text-dim text-sm max-w-md mx-auto reading" style={{ fontSize: '15px' }}>{body}</p>
+    </div>
+  );
+}
+
+/* =====================================================================
+   LOGIN SCREEN
+   ===================================================================== */
+function LoginScreen({ sendMagicLink }) {
+  const [email, setEmail] = useState('');
+  const [status, setStatus] = useState('idle'); // idle | sending | sent | error
+  const [err, setErr] = useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setStatus('sending');
+    setErr('');
+    const result = await sendMagicLink(email);
+    if (result.ok) {
+      setStatus('sent');
+    } else {
+      setErr(result.error || 'Something went wrong.');
+      setStatus('error');
+    }
+  };
+
+  return (
+    <div className="login-bg min-h-screen flex items-center justify-center px-4">
+      <div className="surface rounded-2xl p-10 max-w-md w-full fade-in">
+        <div className="logo-lockup logo-lockup-lg mb-7">
+          <div className="dh-mark">
+            <span className="dh">DH</span>
+            <span className="url">DHIREN<br/>HARCHANDANI<br/>.COM</span>
+          </div>
+          <div className="divider"></div>
+          <div className="myig">
+            <span className="row">MASTER YOUR</span>
+            <span className="row">INNER GAME</span>
+          </div>
+        </div>
+        <h1 className="text-2xl font-bold mb-2">Coaching Dashboard</h1>
+        <p className="text-dim text-sm mb-8">Sign in to your journey.</p>
+
+        {!USE_REAL_AUTH && (
+          <div className="mb-6 p-3 rounded-lg surface-2 text-xs text-dim">
+            <span className="text-secondary font-semibold">Setup mode.</span> Supabase not configured. Any email signs you in.
+          </div>
+        )}
+
+        {status === 'sent' ? (
+          <div className="text-center py-6">
+            <div className="text-4xl mb-3">✉️</div>
+            <h2 className="font-semibold text-lg mb-2">Check your email.</h2>
+            <p className="text-dim text-sm reading">We sent a sign-in link to <strong>{email}</strong>. Click it from this device to land back here, signed in.</p>
+            <button onClick={() => { setStatus('idle'); setEmail(''); }} className="text-primary text-sm mt-6 hover:underline">Use a different email</button>
+          </div>
+        ) : (
+          <form onSubmit={submit}>
+            <label className="block text-xs text-dim mb-2 tracking-wide">EMAIL</label>
+            <input type="email" className="input mb-6" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required disabled={status === 'sending'} />
+
+            {err && <p className="text-sm mb-4" style={{ color: '#f87171' }}>{err}</p>}
+
+            <button type="submit" disabled={status === 'sending' || !email} className="btn-primary w-full py-3 rounded-lg font-semibold disabled:opacity-60">
+              {status === 'sending' ? 'Sending…' : 'Email me a sign-in link'}
+            </button>
+          </form>
+        )}
+
+        <p className="text-faint text-xs text-center mt-6">No password. Just a link in your inbox.</p>
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
+   SIDEBAR + TOP BAR
+   ===================================================================== */
+const NAV = [
+  { section: 'WORKSPACE', items: [
+    { id: 'overview', icon: '🏠', label: 'Overview', route: '/overview' },
+    { id: 'actions', icon: '✅', label: 'Action Items', route: '/actions' },
+    { id: 'journal', icon: '📝', label: 'Journal', route: '/journal' },
+    { id: 'messages', icon: '💬', label: 'Messages', route: '/messages' },
+  ]},
+  { section: 'JOURNEY', items: [
+    { id: 'sessions', icon: '📅', label: 'Sessions', route: '/sessions' },
+    { id: 'growth', icon: '🌱', label: 'Growth', route: '/growth' },
+    { id: 'scorecard', icon: '📊', label: 'Scorecard', route: '/scorecard' },
+    { id: 'next', icon: '🚀', label: 'Next Quarter', route: '/next' },
+  ]},
+  { section: 'LIBRARY', items: [
+    { id: 'resources', icon: '📚', label: 'Resources', route: '/resources' },
+  ]},
+];
+
+function Sidebar({ activeId, onNav, onSignOut, profile, badges = {} }) {
+  return (
+    <aside className="desktop-sidebar w-60 surface flex flex-col flex-shrink-0" style={{ borderRadius: 0, borderTop: 0, borderBottom: 0, borderLeft: 0 }}>
+      <div className="p-5 border-b border-default">
+        <div className="logo-lockup logo-lockup-sm">
+          <div className="dh-mark">
+            <span className="dh">DH</span>
+          </div>
+          <div className="divider"></div>
+          <div className="myig">
+            <span className="row">MASTER YOUR</span>
+            <span className="row">INNER GAME</span>
+          </div>
+        </div>
+      </div>
+      <nav className="p-3 space-y-0.5 flex-1 overflow-y-auto">
+        {NAV.map(section => (
+          <div key={section.section}>
+            <div className="nav-section">{section.section}</div>
+            {section.items.map(item => {
+              const badge = badges[item.id];
+              return (
+                <div key={item.id} className={'nav-item ' + (activeId === item.id ? 'active' : '')} onClick={() => onNav(item.route)}>
+                  <span className="icon">{item.icon}</span>
+                  <span className="flex-1">{item.label}</span>
+                  {badge > 0 && <span className="text-[10px] font-semibold rounded-full px-2 py-0.5" style={{ background: 'var(--secondary)', color: 'white' }}>{badge}</span>}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+      <div className="p-3 border-t border-default">
+        <div className="nav-item" onClick={onSignOut}>
+          <span className="icon">🚪</span><span>Sign Out</span>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function TopBar({ profile, onSearch, onToggleTheme, theme }) {
+  const initial = profile.name.charAt(0);
+  return (
+    <header className="surface flex items-center justify-between gap-3 px-4 md:px-6 py-3 flex-shrink-0" style={{ borderRadius: 0, borderTop: 0, borderLeft: 0, borderRight: 0 }}>
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="w-9 h-9 rounded-full flex items-center justify-center font-semibold flex-shrink-0" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>{initial}</div>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold truncate">{profile.name}</p>
+          <p className="text-xs text-faint truncate">{profile.role}</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <button onClick={onSearch} className="surface-2 rounded-lg px-3 py-2 text-faint text-sm hide-mobile flex items-center gap-2 hover:opacity-80" style={{ minWidth: '220px', justifyContent: 'flex-start' }}>
+          🔍 <span>Search…</span>
+          <span className="ml-auto text-xs px-1.5 py-0.5 rounded surface" style={{ borderRadius: '4px' }}>⌘K</span>
+        </button>
+        <button onClick={onSearch} className="surface-2 w-9 h-9 rounded-lg flex items-center justify-center hide-desktop">🔍</button>
+        <button onClick={onToggleTheme} className="surface-2 w-9 h-9 rounded-lg flex items-center justify-center" title="Toggle theme">{theme === 'dark' ? '☀️' : '🌙'}</button>
+      </div>
+    </header>
+  );
+}
+
+function MobileBottomNav({ activeId, onNav }) {
+  const tabs = [
+    { id: 'overview', icon: '🏠', label: 'Home', route: '/overview' },
+    { id: 'sessions', icon: '📅', label: 'Sessions', route: '/sessions' },
+    { id: 'actions', icon: '✅', label: 'Actions', route: '/actions' },
+    { id: 'growth', icon: '🌱', label: 'Growth', route: '/growth' },
+    { id: 'next', icon: '🚀', label: 'Next', route: '/next' },
+    { id: 'more', icon: '⋯', label: 'More', route: '/resources' },
+  ];
+  const isActive = (id) => activeId === id || (id === 'more' && ['journal','messages','scorecard','resources'].includes(activeId));
+  return (
+    <nav className="mobile-bottom-nav fixed bottom-0 left-0 right-0 surface" style={{ borderRadius: 0, borderBottom: 0, borderLeft: 0, borderRight: 0, paddingBottom: 'env(safe-area-inset-bottom)' }}>
+      {tabs.map(t => (
+        <div key={t.id} className={'mobile-tab ' + (isActive(t.id) ? 'active' : '')} onClick={() => onNav(t.route)}>
+          <span style={{ fontSize: '18px' }}>{t.icon}</span>
+          <span>{t.label}</span>
+        </div>
+      ))}
+    </nav>
+  );
+}
+
+/* =====================================================================
+   SEARCH OVERLAY
+   ===================================================================== */
+function SearchOverlay({ onClose, index, onNav }) {
+  const [q, setQ] = useState('');
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  const results = useMemo(() => search(q, index), [q, index]);
+  const typeIcon = { session: '📅', win: '🏆', edge: '🪜', quote: '💬', pattern: '🔄', action: '✅', priority: '🚀', resource: '📚' };
+  return (
+    <div className="search-backdrop" onClick={onClose}>
+      <div className="surface rounded-2xl w-full max-w-2xl mx-4 fade-in" onClick={e => e.stopPropagation()}>
+        <div className="p-4 border-b border-default">
+          <input ref={inputRef} type="text" value={q} onChange={e => setQ(e.target.value)} placeholder="What are you looking for?"
+            className="w-full bg-transparent outline-none text-lg" />
+        </div>
+        <div className="max-h-[60vh] overflow-y-auto p-2">
+          {q.length < 2 && (
+            <p className="text-faint text-sm p-6 text-center">Search sessions, action items, quotes, patterns, wins, growth edges, priorities, resources.</p>
+          )}
+          {q.length >= 2 && results.length === 0 && (
+            <p className="text-faint text-sm p-6 text-center">Nothing matched. Try shorter or different words.</p>
+          )}
+          {results.map((r, i) => (
+            <div key={i} onClick={() => { onNav(r.route); onClose(); }} className="p-3 rounded-lg hover:bg-primary-soft cursor-pointer flex gap-3">
+              <span className="text-lg flex-shrink-0">{typeIcon[r.type]}</span>
+              <div className="min-w-0">
+                <p className="font-medium truncate">{r.label}</p>
+                <p className="text-xs text-faint truncate">{r.sub}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
+   VIEW: OVERVIEW
+   ===================================================================== */
+function OverviewView({ data, onNav, actionItems }) {
+  const lastSession = useMemo(() => [...data.sessions].reverse().find(s => s.summaryMd && !s.summaryMd.startsWith('_No recap')), [data]);
+  const top3 = data.nextQuarter.slice(0, 3);
+  const sortedScores = [...data.scorecard].sort((a, b) => b.score - a.score);
+  const topScores = sortedScores.slice(0, 3);
+  const bottomScores = sortedScores.slice(-3).reverse();
+
+  return (
+    <div className="fade-in space-y-10">
+      {/* Hero */}
+      <div>
+        <p className="text-faint text-xs tracking-[0.2em] mb-2">{data.profile.themeBanner.toUpperCase()}</p>
+        <h1 className="text-3xl md:text-4xl font-bold mb-3">Welcome back, {data.profile.preferredName}.</h1>
+        <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>The year word is <strong style={{ fontStyle: 'normal' }}>{data.profile.yearWord}</strong>. Make it visible.</p>
+      </div>
+
+      {/* Hero CTAs */}
+      <HeroCTAs onNav={onNav} data={data} actionItems={actionItems} />
+
+
+      {/* Stat strip */}
+      <div className="flex gap-3 flex-wrap">
+        <StatBlock value={data.stats.sessions} label="Sessions" accent="var(--primary)" />
+        <StatBlock value={data.stats.months} label="Months" />
+        <StatBlock value={data.stats.quarters} label="Quarters" />
+        <StatBlock value={data.stats.recapped} label="Recapped" />
+      </div>
+
+      {/* Engagement card */}
+      {data.engagement && (
+        <div>
+          <SectionHeading sub={`${data.engagement.cadence} · ${data.engagement.packageLabel}`}>Engagement Status</SectionHeading>
+          <div className="surface rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+              <div>
+                <p className="text-3xl font-bold">
+                  <span className="text-primary">{data.engagement.remaining}</span>
+                  <span className="text-faint text-2xl"> of {data.engagement.contracted} sessions left</span>
+                </p>
+                <p className="text-faint text-xs mt-1">{data.engagement.completed} completed in {data.engagement.packageLabel.toLowerCase()}</p>
+              </div>
+              <button onClick={() => onNav('/resource/agreement')} className="text-primary text-sm hover:underline">View agreement →</button>
+            </div>
+            {/* Progress dots */}
+            <div className="flex gap-1.5">
+              {Array.from({ length: data.engagement.contracted }).map((_, i) => (
+                <div key={i} className="flex-1 h-2 rounded-full" style={{
+                  background: i < data.engagement.completed ? 'var(--primary)' : 'var(--surface-2)',
+                  opacity: i < data.engagement.completed ? 1 : 0.6
+                }}></div>
+              ))}
+            </div>
+            <p className="text-secondary italic text-xs mt-4 reading">Sessions are the container. Movement is the proof.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Last session */}
+      <div>
+        <SectionHeading sub="The most recent recap.">Last Session</SectionHeading>
+        {lastSession ? (
+          <div className="surface rounded-2xl p-6 cursor-pointer hover:opacity-95" onClick={() => onNav('/session/' + lastSession.id)}>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-primary text-sm font-semibold">{lastSession.displayDate}</p>
+                <h3 className="text-xl font-bold mt-1">{lastSession.title}</h3>
+                <p className="text-faint text-xs mt-1">{lastSession.theme}{lastSession.durationMin ? ` · ${lastSession.durationMin} min` : ''}</p>
+              </div>
+              <span className="text-faint">→</span>
+            </div>
+            {lastSession.keyTakeaway && (
+              <p className="text-secondary italic reading border-l-2 pl-4 mt-4" style={{ borderColor: 'var(--secondary)', fontSize: '16px' }}>
+                {lastSession.keyTakeaway}
+              </p>
+            )}
+          </div>
+        ) : (
+          <EmptyState icon="📅" title="Your first session is around the corner." body="The recap appears here within 24 hours of our session." />
+        )}
+      </div>
+
+      {/* This Quarter Focus */}
+      <div>
+        <SectionHeading sub="Top 3 commitments this quarter.">This Quarter's Focus</SectionHeading>
+        <div className="space-y-2">
+          {top3.map(p => (
+            <div key={p.number} className="surface rounded-xl p-4 flex gap-4 items-start">
+              <span className="w-8 h-8 rounded-full flex items-center justify-center font-bold flex-shrink-0 text-white" style={{ background: 'var(--primary)' }}>{p.number}</span>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold">{p.title}</h4>
+                <p className="text-faint text-sm mt-0.5 line-clamp-2">{p.body}</p>
+              </div>
+            </div>
+          ))}
+          <button onClick={() => onNav('/next')} className="text-primary text-sm hover:underline mt-2">See all 5 →</button>
+        </div>
+      </div>
+
+      {/* Evolution Arc */}
+      <div>
+        <SectionHeading sub="The shape of the journey, quarter by quarter.">Evolution Arc</SectionHeading>
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          {data.evolutionArc.map(arc => (
+            <div key={arc.id} className="surface rounded-xl p-4" style={{ borderTop: `2px solid ${arc.color}` }}>
+              <p className="text-xs font-semibold mb-1" style={{ color: arc.color }}>{arc.label}</p>
+              <p className="font-bold text-sm mb-2">{arc.title}</p>
+              <p className="text-faint text-xs leading-relaxed">{arc.summary}</p>
+              <p className="text-faint text-[11px] mt-2">{arc.sessionCount} session{arc.sessionCount !== 1 ? 's' : ''}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Scorecard pulse */}
+      <div>
+        <SectionHeading sub="Three strongest, three still developing.">Scorecard Pulse</SectionHeading>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="surface rounded-xl p-5">
+            <p className="text-xs tracking-widest text-faint mb-3">STRONGEST</p>
+            <div className="space-y-2">
+              {topScores.map(s => (
+                <div key={s.dimension} className="flex justify-between text-sm">
+                  <span>{s.dimension}</span>
+                  <span className="text-primary font-semibold">{s.score}/{s.max}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="surface rounded-xl p-5">
+            <p className="text-xs tracking-widest text-faint mb-3">STILL DEVELOPING</p>
+            <div className="space-y-2">
+              {bottomScores.map(s => (
+                <div key={s.dimension} className="flex justify-between text-sm">
+                  <span>{s.dimension}</span>
+                  <span className="text-secondary font-semibold">{s.score}/{s.max}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <button onClick={() => onNav('/scorecard')} className="text-primary text-sm hover:underline mt-3">See full scorecard →</button>
+      </div>
+
+      {/* Quick links */}
+      <div>
+        <SectionHeading>Jump to</SectionHeading>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { icon: '📅', label: 'All Sessions', route: '/sessions' },
+            { icon: '✅', label: 'Action Items', route: '/actions' },
+            { icon: '🌱', label: 'Wins & Growth', route: '/growth' },
+            { icon: '📚', label: 'Resources', route: '/resources' },
+          ].map(t => (
+            <div key={t.route} onClick={() => onNav(t.route)} className="surface-2 rounded-xl p-4 cursor-pointer hover:opacity-80 text-center">
+              <div className="text-2xl mb-1">{t.icon}</div>
+              <div className="text-sm font-semibold">{t.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
+   VIEW: SESSIONS LIST + DETAIL
+   ===================================================================== */
+function SessionsView({ data, onNav, route, unviewedIds = [] }) {
+  const unviewedSet = useMemo(() => new Set(unviewedIds), [unviewedIds]);
+  const [q, setQ] = useState('');
+  const [quarterFilter, setQuarterFilter] = useState('all');
+  const sessions = useMemo(() => {
+    let s = [...data.sessions].reverse();
+    if (q) {
+      const ql = q.toLowerCase();
+      s = s.filter(x => (x.title + ' ' + (x.summaryMd || '') + ' ' + (x.keyTakeaway || '')).toLowerCase().includes(ql));
+    }
+    if (quarterFilter !== 'all') s = s.filter(x => x.quarter === quarterFilter);
+    return s;
+  }, [data, q, quarterFilter]);
+
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">SESSIONS</p>
+      <h1 className="text-3xl font-bold mb-2">All Sessions</h1>
+      <p className="text-dim mb-6 reading" style={{ fontSize: '15px' }}>Search the journey. Pull up any conversation.</p>
+
+      <div className="surface rounded-xl p-3 mb-4 flex gap-2 flex-wrap items-center">
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 Search keyword (e.g. delegation, Amit, P&L)" className="input flex-1 min-w-[200px]" style={{ background: 'transparent', border: 'none', padding: '8px 12px' }} />
+        <select value={quarterFilter} onChange={e => setQuarterFilter(e.target.value)} className="input" style={{ width: 'auto' }}>
+          <option value="all">All Quarters</option>
+          {data.evolutionArc.map(a => <option key={a.id} value={a.id}>{a.label} — {a.title}</option>)}
+        </select>
+      </div>
+
+      {sessions.length === 0 && (
+        <EmptyState icon="🔍" title="Nothing matched." body="Try a different word — or clear the filter to see everything." />
+      )}
+
+      <div className="space-y-2">
+        {sessions.map(s => (
+          <div key={s.id} onClick={() => onNav('/session/' + s.id)} className="surface rounded-xl p-4 cursor-pointer hover:opacity-90 flex items-start gap-4">
+            <div className="text-primary font-medium w-20 text-sm flex-shrink-0">{s.displayDate.replace(', 2025', '').replace(', 2026', '')}</div>
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold flex items-center gap-2">
+                {s.title}
+                {unviewedSet.has(s.id) && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: 'var(--secondary)', color: 'white' }}>NEW</span>}
+              </div>
+              <div className="text-xs text-faint mt-0.5">{s.theme}{s.durationMin ? ` · ${s.durationMin} min` : ''}{s.recordingUrl ? ' · 🎬 recording' : ''}</div>
+              {s.keyTakeaway && <p className="text-sm text-dim mt-2 italic">{s.keyTakeaway}</p>}
+            </div>
+            <div className="text-faint flex-shrink-0">→</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, markViewed }) {
+  const session = data.sessions.find(s => s.id === sessionId);
+  useEffect(() => { if (session && markViewed) markViewed(session.id); }, [session, markViewed]);
+  if (!session) return <EmptyState icon="❓" title="Session not found." body="The session you're looking for doesn't exist or hasn't been loaded yet." />;
+
+  const sessionActions = actionItems.filter(a => a.sessionId === sessionId);
+
+  return (
+    <div className="fade-in">
+      <button onClick={() => onNav('/sessions')} className="text-primary text-sm mb-6 hover:underline flex items-center gap-1">← All sessions</button>
+
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">{session.theme.toUpperCase()}</p>
+      <h1 className="text-3xl md:text-4xl font-bold mb-3">{session.title}</h1>
+      <p className="text-dim text-sm mb-6">{session.displayDate}{session.durationMin ? ` · ${session.durationMin} min` : ''}</p>
+
+      {session.keyTakeaway && (
+        <div className="surface rounded-xl p-5 mb-8 border-l-4" style={{ borderColor: 'var(--secondary)' }}>
+          <p className="text-xs tracking-widest text-faint mb-2">KEY TAKEAWAY</p>
+          <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>{session.keyTakeaway}</p>
+        </div>
+      )}
+
+      {session.recordingUrl && (
+        <a href={session.recordingUrl} target="_blank" rel="noopener" className="inline-flex items-center gap-2 mb-8 px-4 py-2 rounded-lg surface hover:opacity-90 text-sm">
+          🎬 <span>Watch recording</span> <span className="text-faint">↗</span>
+        </a>
+      )}
+
+      <div className="surface rounded-2xl p-6 md:p-10 mb-8">
+        <Markdown source={session.summaryMd} />
+      </div>
+
+      {sessionActions.length > 0 && (
+        <div className="mb-8">
+          <SectionHeading sub="Tap a checkbox to cycle: pending → in motion → done.">Action Items from this session</SectionHeading>
+          <div className="space-y-2">
+            {sessionActions.map(a => <ActionRow key={a.id} item={a} onCycle={() => cycleStatus(a.id)} />)}
+          </div>
+        </div>
+      )}
+
+      {/* Feedback (👍/🤔/❌) — Phase 4 stub */}
+      <div className="surface rounded-2xl p-6 text-center">
+        <p className="text-dim text-sm mb-3">Did this session land?</p>
+        <div className="flex justify-center gap-3">
+          <button className="text-2xl hover:scale-110 transition-transform p-2" title="Landed">👍</button>
+          <button className="text-2xl hover:scale-110 transition-transform p-2" title="Mixed">🤔</button>
+          <button className="text-2xl hover:scale-110 transition-transform p-2" title="Missed">❌</button>
+        </div>
+        <p className="text-faint text-xs mt-3">Feedback channel opens in Phase 4 — for now this is a stub.</p>
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
+   VIEW: ACTION ITEMS
+   ===================================================================== */
+function ActionRow({ item, onCycle }) {
+  const sessionRef = item._sessionLabel ? <span className="text-faint text-xs ml-2">· {item._sessionLabel}</span> : null;
+  const cls = item.status === 'done' ? 'check done' : item.status === 'ongoing' ? 'check ongoing' : 'check';
+  const labelOpacity = item.status === 'done' ? 'opacity-60 line-through' : '';
+  return (
+    <div className="surface rounded-xl p-4 flex gap-3 items-start">
+      <button onClick={onCycle} className={cls} title={`Status: ${item.status}`}>
+        {item.status === 'done' ? '✓' : item.status === 'ongoing' ? '◐' : ''}
+      </button>
+      <div className="flex-1 min-w-0">
+        <p className={'text-sm ' + labelOpacity}>{item.text}</p>
+        {item.notes && <p className="text-faint text-xs mt-1 italic">{item.notes}</p>}
+        <div className="text-faint text-xs mt-1">
+          <span className="capitalize">{item.category?.replace('-', ' ') || 'general'}</span>
+          {sessionRef}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActionItemsView({ data, actionItems, cycleStatus }) {
+  const [filter, setFilter] = useState('all');
+  const sessionLookup = useMemo(() => Object.fromEntries(data.sessions.map(s => [s.id, s.displayDate])), [data]);
+  const enriched = useMemo(() => actionItems.map(a => ({ ...a, _sessionLabel: sessionLookup[a.sessionId] })), [actionItems, sessionLookup]);
+  const filtered = filter === 'all' ? enriched : enriched.filter(a => a.status === filter);
+
+  const counts = useMemo(() => ({
+    all: actionItems.length,
+    pending: actionItems.filter(a => a.status === 'pending').length,
+    ongoing: actionItems.filter(a => a.status === 'ongoing').length,
+    done: actionItems.filter(a => a.status === 'done').length,
+  }), [actionItems]);
+
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">ACTION ITEMS</p>
+      <h1 className="text-3xl font-bold mb-2">Commitments Across Every Session</h1>
+      <p className="text-dim mb-6 reading" style={{ fontSize: '15px' }}>Tap to cycle status. <em className="text-secondary not-italic">Done is the only proof. Notes are the receipts.</em></p>
+
+      <div className="flex gap-2 mb-6 flex-wrap">
+        {['all', 'pending', 'ongoing', 'done'].map(f => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={'px-3 py-1.5 rounded-lg text-sm capitalize ' + (filter === f ? 'btn-primary' : 'surface hover:opacity-80')}>
+            {f === 'ongoing' ? 'In motion' : f} <span className="text-xs opacity-70">({counts[f]})</span>
+          </button>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState icon="✅" title="Nothing here yet." body="Action items pulled from every session recap will appear here as commitments are made." />
+      ) : (
+        <div className="space-y-2">
+          {filtered.map(a => <ActionRow key={a.id} item={a} onCycle={() => cycleStatus(a.id)} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =====================================================================
+   VIEW: GROWTH (Wins / Edges / Patterns / Quotes)
+   ===================================================================== */
+function GrowthView({ data }) {
+  const [tab, setTab] = useState('wins');
+  useEffect(() => {
+    const hash = window.location.hash.split('#')[2];
+    if (hash && ['wins','edges','patterns','quotes'].includes(hash)) setTab(hash);
+  }, []);
+
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">GROWTH</p>
+      <h1 className="text-3xl font-bold mb-2">Wins, Edges, Patterns, Quotes</h1>
+      <p className="text-dim mb-6 reading" style={{ fontSize: '15px' }}>What you've built. What's still calling. What keeps showing up.</p>
+
+      <div className="flex gap-2 mb-6 flex-wrap border-b border-default pb-2">
+        {[
+          { id: 'wins', label: '🏆 Wins', count: data.wins.length },
+          { id: 'edges', label: '🪜 Growth Edges', count: data.growthEdges.length },
+          { id: 'patterns', label: '🔄 Patterns', count: data.patterns.length },
+          { id: 'quotes', label: '💬 Quotes', count: data.quotes.length },
+        ].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={'px-3 py-1.5 rounded-lg text-sm ' + (tab === t.id ? 'btn-primary' : 'hover:bg-primary-soft')}>
+            {t.label} <span className="text-xs opacity-70">({t.count})</span>
+          </button>
+        ))}
+      </div>
+
+      {tab === 'wins' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {data.wins.map((w, i) => (
+            <div key={i} className="surface rounded-xl p-5">
+              <h4 className="text-primary font-bold mb-2">{w.title}</h4>
+              <p className="text-dim text-sm reading" style={{ fontSize: '14px' }}>{w.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'edges' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {data.growthEdges.map((g, i) => (
+            <div key={i} className="surface rounded-xl p-5">
+              <h4 className="text-secondary font-bold mb-2">{g.title}</h4>
+              <p className="text-dim text-sm reading" style={{ fontSize: '14px' }}>{g.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'patterns' && (
+        <div className="surface rounded-2xl p-6">
+          <p className="text-xs tracking-widest text-faint mb-4">RECURRING PATTERNS</p>
+          <div className="flex flex-wrap gap-2">
+            {data.patterns.map((p, i) => (
+              <span key={i} className="px-4 py-2 rounded-full text-sm" style={{ background: p.color + '22', color: p.color, border: '1px solid ' + p.color + '55' }}>
+                {p.label}
+              </span>
+            ))}
+          </div>
+          <p className="text-faint text-xs mt-6 reading">These are the loops the work returns to. Awareness is the first move. Naming is the second. Reframing is third.</p>
+        </div>
+      )}
+
+      {tab === 'quotes' && (
+        <div className="space-y-3">
+          {data.quotes.map((q, i) => (
+            <div key={i} className="surface rounded-xl p-6 border-l-2" style={{ borderColor: 'var(--secondary)' }}>
+              <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>"{q.text}"</p>
+              <p className="text-faint text-xs mt-3">— {q.attribution}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =====================================================================
+   VIEW: SCORECARD (interactive — self-assessment)
+   ===================================================================== */
+function ScorecardView({ data }) {
+  const selfKey = `ig-scorecard-self-${data.id}`;
+  const updatedKey = `ig-scorecard-updated-${data.id}`;
+  const [selfScores, setSelfScores] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(selfKey) || '{}'); } catch { return {}; }
+  });
+  const updateSelf = (dimension, value) => {
+    const next = { ...selfScores, [dimension]: value };
+    setSelfScores(next);
+    localStorage.setItem(selfKey, JSON.stringify(next));
+    localStorage.setItem(updatedKey, Date.now().toString());
+  };
+  const resetSelf = () => {
+    setSelfScores({});
+    localStorage.removeItem(selfKey);
+    localStorage.removeItem(updatedKey);
+  };
+  const hasSelf = Object.keys(selfScores).length > 0;
+
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">SCORECARD</p>
+      <h1 className="text-3xl font-bold mb-2">Inner Game Scorecard</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>Tap a number to set your self-assessment. <em className="text-secondary not-italic">Scores are not the goal. Movement is.</em></p>
+
+      <div className="surface rounded-2xl p-5 mb-6 flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-6 text-xs flex-wrap">
+          <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm" style={{ background: 'var(--primary)' }}></span><span>Your self-assessment</span></div>
+          <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm" style={{ background: 'var(--secondary)' }}></span><span>Coach's read</span></div>
+        </div>
+        {hasSelf && <button onClick={resetSelf} className="text-faint text-xs hover:text-primary">Reset to coach's scores</button>}
+      </div>
+
+      <div className="surface rounded-2xl p-6 md:p-8">
+        <div className="space-y-6">
+          {data.scorecard.map((s) => {
+            const self = selfScores[s.dimension];
+            return (
+              <div key={s.dimension}>
+                <div className="flex justify-between items-baseline text-sm mb-3 flex-wrap gap-2">
+                  <span className="font-medium">{s.dimension}</span>
+                  <div className="flex gap-4 text-xs">
+                    <span className="text-secondary">Coach <strong>{s.score}</strong></span>
+                    <span className="text-primary">You <strong>{self !== undefined ? self : '—'}</strong></span>
+                  </div>
+                </div>
+                <div className="flex gap-1">
+                  {Array.from({ length: s.max }).map((_, i) => {
+                    const val = i + 1;
+                    const isSelfFilled = self !== undefined && val <= self;
+                    const isCoachMark = val === s.score;
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => updateSelf(s.dimension, val)}
+                        className="flex-1 rounded-sm hover:opacity-90 transition-opacity relative"
+                        style={{
+                          height: '20px',
+                          background: isSelfFilled ? 'var(--primary)' : 'var(--surface-2)',
+                          border: '1px solid var(--border)',
+                          cursor: 'pointer',
+                        }}
+                        title={`Set ${val}/${s.max}`}
+                      >
+                        {isCoachMark && (
+                          <span style={{ position: 'absolute', top: '-6px', left: '50%', transform: 'translateX(-50%)', width: '6px', height: '6px', borderRadius: '50%', background: 'var(--secondary)' }}></span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <p className="text-faint text-xs mt-6 reading text-center">Future versions will track the trajectory over time. For now — your latest self-assessment, alongside the coach's read.</p>
+    </div>
+  );
+}
+
+/* =====================================================================
+   VIEW: NEXT QUARTER
+   ===================================================================== */
+function NextQuarterView({ data }) {
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">NEXT QUARTER · {data.profile.currentQuarter.toUpperCase()}</p>
+      <h1 className="text-3xl font-bold mb-2">Top 5 Priorities</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>What we're building toward. <em className="text-secondary not-italic">Five is the lazy version of three — but five is what we agreed.</em></p>
+
+      <div className="space-y-3">
+        {data.nextQuarter.map(p => (
+          <div key={p.number} className="surface rounded-xl p-5 flex gap-4 items-start">
+            <span className="w-9 h-9 rounded-full flex items-center justify-center font-bold flex-shrink-0 text-white" style={{ background: 'var(--primary)' }}>{p.number}</span>
+            <div className="flex-1 min-w-0">
+              <h4 className="text-lg font-semibold mb-1.5">{p.title}</h4>
+              <p className="text-dim reading" style={{ fontSize: '15px' }}>{p.body}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
+   VIEW: RESOURCES (list + detail)
+   ===================================================================== */
+function ResourcesView({ data, onNav }) {
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">RESOURCES</p>
+      <h1 className="text-3xl font-bold mb-2">Library</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>Intake materials, frameworks, and reference docs from your engagement.</p>
+
+      {data.resources.map((folder) => (
+        <div key={folder.folder} className="mb-8">
+          <h3 className="text-sm font-semibold text-faint tracking-wide mb-3 flex items-center gap-2">
+            <span>{folder.icon}</span>
+            <span>{folder.folder.toUpperCase()}</span>
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {folder.items.map(item => (
+              <div key={item.id} onClick={() => onNav('/resource/' + item.id)} className="surface rounded-xl p-5 cursor-pointer hover:opacity-90 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h4 className="font-bold mb-1 flex items-center gap-2">{item.title} {(item.storagePath || item.pdfFile) && <span className="text-[10px] px-1.5 py-0.5 rounded font-normal" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>PDF</span>}</h4>
+                  <p className="text-faint text-xs reading">{item.description}</p>
+                </div>
+                <span className="text-faint flex-shrink-0">→</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      <p className="text-faint text-xs text-center mt-8">Folders and documents will scale as new frameworks land in the work.</p>
+    </div>
+  );
+}
+
+function ResourceDetailView({ data, resourceId, onNav }) {
+  const item = useMemo(() => {
+    for (const folder of data.resources) {
+      const found = folder.items.find(i => i.id === resourceId);
+      if (found) return { ...found, folder: folder.folder };
+    }
+    return null;
+  }, [data, resourceId]);
+
+  // Generate signed URL for Storage-backed PDFs
+  const [signedUrl, setSignedUrl] = useState(null);
+  useEffect(() => {
+    if (!item) return;
+    if (item.storagePath && sb) {
+      sb.storage.from('resources').createSignedUrl(item.storagePath, 3600)
+        .then(({ data, error }) => {
+          if (data?.signedUrl) setSignedUrl(data.signedUrl);
+        });
+    } else if (item.pdfFile) {
+      // Fallback to local path if no storagePath
+      setSignedUrl(item.pdfFile);
+    }
+  }, [item]);
+
+  if (!item) return <EmptyState icon="❓" title="Document not found." body="This resource doesn't exist or hasn't been published yet." />;
+
+  return (
+    <div className="fade-in">
+      <button onClick={() => onNav('/resources')} className="text-primary text-sm mb-6 hover:underline flex items-center gap-1">← Library</button>
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">{item.folder.toUpperCase()}</p>
+      <h1 className="text-3xl md:text-4xl font-bold mb-3">{item.title}</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>{item.description}</p>
+
+      {(item.storagePath || item.pdfFile) && (
+        <div className="surface rounded-2xl p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">📄</span>
+            <div>
+              <p className="font-semibold text-sm">PDF attachment</p>
+              <p className="text-faint text-xs">{item.pdfSize || ''}</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            {signedUrl ? (
+              <>
+                <a href={signedUrl} target="_blank" rel="noopener" className="px-4 py-2 rounded-lg text-sm font-semibold btn-primary">Open PDF ↗</a>
+                <a href={signedUrl} download className="px-4 py-2 rounded-lg text-sm font-semibold surface-2 hover:opacity-80">Download</a>
+              </>
+            ) : (
+              <span className="text-faint text-sm">Loading file…</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {signedUrl && (item.storagePath || item.pdfFile) && (
+        <div className="surface rounded-2xl mb-6 overflow-hidden" style={{ height: '70vh' }}>
+          <iframe src={signedUrl} title={item.title} style={{ width: '100%', height: '100%', border: 'none' }}></iframe>
+        </div>
+      )}
+
+      {item.bodyMd && (
+        <div className="surface rounded-2xl p-6 md:p-10">
+          <Markdown source={item.bodyMd} />
+        </div>
+      )}
+
+      {!item.bodyMd && !item.pdfFile && !item.storagePath && (
+        <div className="surface rounded-2xl p-10 text-center">
+          <p className="text-faint italic">Content coming soon.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =====================================================================
+   VIEW: JOURNAL (stub)
+   ===================================================================== */
+function JournalView({ data }) {
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">JOURNAL</p>
+      <h1 className="text-3xl font-bold mb-2">Your Private Space</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>Reflections between sessions. <em className="text-secondary not-italic">Only you see this.</em></p>
+
+      <EmptyState
+        icon="📝"
+        title="Coming in Phase 2."
+        body="Write entries, link them to sessions, tag by theme. The space where the inner work lands between conversations." />
+    </div>
+  );
+}
+
+/* =====================================================================
+   VIEW: MESSAGES (stub)
+   ===================================================================== */
+function MessagesView({ data }) {
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">MESSAGES</p>
+      <h1 className="text-3xl font-bold mb-2">Direct Line to Dhiren</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>Drop a question. Share a win. Flag something before next session.</p>
+
+      <EmptyState
+        icon="💬"
+        title="Coming in Phase 3."
+        body="Threaded coach ↔ coachee comms with email + WhatsApp delivery. For now — text Dhiren directly." />
+    </div>
+  );
+}
+
+/* =====================================================================
+   APP SHELL
+   ===================================================================== */
+function AppShell({ data, signOut }) {
+  const [route, go] = useHashRoute();
+  const [theme, toggleTheme] = useTheme();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [actionItems, cycleStatus] = useActionStatus(data.id, data.actionItems);
+  const allSessionIds = useMemo(() => data.sessions.map(s => s.id), [data]);
+  const { viewed, markViewed, unviewedCount, unviewedIds } = useViewedSessions(data.id, allSessionIds);
+
+  const searchIndex = useMemo(() => buildSearchIndex(data), [data]);
+
+  // ⌘K shortcut
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setSearchOpen(true); }
+      if (e.key === 'Escape') setSearchOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Determine active tab
+  const activeId = useMemo(() => {
+    const seg = route.split('/')[1];
+    if (seg === 'session') return 'sessions';
+    if (seg === 'resource') return 'resources';
+    if (seg === 'next') return 'next';
+    if (!seg) return 'overview';
+    return seg;
+  }, [route]);
+
+  // Render view
+  const view = useMemo(() => {
+    const parts = route.split('/').filter(Boolean);
+    const seg = parts[0] || 'overview';
+    if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} />;
+    if (seg === 'sessions') return <SessionsView data={data} onNav={go} route={route} unviewedIds={unviewedIds} />;
+    if (seg === 'session' && parts[1]) return <SessionDetailView data={data} sessionId={parts[1]} onNav={go} actionItems={actionItems} cycleStatus={cycleStatus} markViewed={markViewed} />;
+    if (seg === 'actions') return <ActionItemsView data={data} actionItems={actionItems} cycleStatus={cycleStatus} />;
+    if (seg === 'growth') return <GrowthView data={data} />;
+    if (seg === 'scorecard') return <ScorecardView data={data} />;
+    if (seg === 'next') return <NextQuarterView data={data} />;
+    if (seg === 'resources') return <ResourcesView data={data} onNav={go} />;
+    if (seg === 'resource' && parts[1]) return <ResourceDetailView data={data} resourceId={parts[1]} onNav={go} />;
+    if (seg === 'journal') return <JournalView data={data} />;
+    if (seg === 'messages') return <MessagesView data={data} />;
+    return <OverviewView data={data} onNav={go} />;
+  }, [route, data, actionItems]);
+
+  return (
+    <div className="flex min-h-screen">
+      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount }} />
+      <div className="flex-1 flex flex-col main-content min-w-0">
+        <TopBar profile={data.profile} onSearch={() => setSearchOpen(true)} onToggleTheme={toggleTheme} theme={theme} />
+        <main className="flex-1 p-5 md:p-10 overflow-y-auto" key={route}>
+          <div className="max-w-5xl mx-auto">
+            {view}
+          </div>
+        </main>
+      </div>
+      <MobileBottomNav activeId={activeId} onNav={go} />
+      {searchOpen && <SearchOverlay onClose={() => setSearchOpen(false)} index={searchIndex} onNav={go} />}
+    </div>
+  );
+}
+
+/* =====================================================================
+   ROOT APP
+   ===================================================================== */
+function App() {
+  const { session, loading, sendMagicLink, signOut, authedEmail } = useAuth();
+  const { data, error } = useCoacheeData(authedEmail);
+
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <p className="text-faint text-sm">Loading…</p>
+    </div>
+  );
+
+  if (!session) return <LoginScreen sendMagicLink={sendMagicLink} />;
+
+  if (error === 'NO_DASHBOARD') return (
+    <div className="login-bg min-h-screen flex items-center justify-center p-6">
+      <div className="surface rounded-2xl p-10 max-w-md text-center">
+        <div className="text-4xl mb-3">🔒</div>
+        <h2 className="font-semibold text-lg mb-2">No dashboard for this email yet.</h2>
+        <p className="text-faint text-sm mb-6 reading">You're signed in as <strong>{authedEmail}</strong>, but there's no coachee record under this address. Reach Dhiren if this is unexpected.</p>
+        <button onClick={signOut} className="btn-primary px-5 py-2 rounded-lg font-semibold">Sign out</button>
+      </div>
+    </div>
+  );
+
+  if (error) return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="surface rounded-2xl p-8 max-w-md text-center">
+        <p className="text-2xl mb-3">⚠️</p>
+        <p className="font-semibold mb-2">Couldn't load coachee data.</p>
+        <p className="text-faint text-sm">{error}</p>
+      </div>
+    </div>
+  );
+
+  if (!data) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <p className="text-faint text-sm">Loading your dashboard…</p>
+    </div>
+  );
+
+  return <AppShell data={data} signOut={signOut} />;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+
+</body>
+</html>
