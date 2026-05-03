@@ -375,10 +375,56 @@ function SectionHeading({ children, sub }) {
   );
 }
 
+/* =====================================================================
+   ICONS — Heroicons-style outline (matches Mindset Journal app)
+   ===================================================================== */
+const ICONS = {
+  home: 'M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25',
+  calendar: 'M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5',
+  check: 'M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
+  pencil: 'M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10',
+  chat: 'M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z',
+  sparkles: 'M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z',
+  chart: 'M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z',
+  rocket: 'M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z',
+  book: 'M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25',
+  logout: 'M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75',
+  search: 'M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z',
+  sun: 'M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z',
+  moon: 'M21.752 15.002A9.72 9.72 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z',
+  trophy: 'M16.5 18.75h-9m9 0a3 3 0 013 3h-15a3 3 0 013-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 01-.982-3.172M9.497 14.25a7.454 7.454 0 00.981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 007.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M7.73 9.728a6.726 6.726 0 002.748 1.35m8.272-6.842V4.5c0 2.108-.966 3.99-2.48 5.228m2.48-5.492a46.32 46.32 0 012.916.52 6.003 6.003 0 01-5.395 4.972m0 0a6.726 6.726 0 01-2.749 1.35m0 0a6.772 6.772 0 01-3.044 0',
+  trending: 'M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.281m5.94 2.28l-2.28 5.941',
+  refresh: 'M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99',
+  document: 'M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z',
+  play: 'M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z',
+  map: 'M9 6.75V15m6-6v8.25m.503 3.498l4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 00-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0z',
+  clipboard: 'M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z',
+  ellipsis: 'M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z',
+  arrow: 'M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3',
+  arrowLeft: 'M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18',
+  lock: 'M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z',
+  envelope: 'M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75',
+  question: 'M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z',
+  warning: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.008v.008H12v-.008z',
+  xmark: 'M6 18L18 6M6 6l12 12',
+  thumbsUp: 'M6.633 10.5c.806 0 1.533-.446 2.031-1.08a9.041 9.041 0 012.861-2.4c.723-.384 1.35-.956 1.653-1.715a4.498 4.498 0 00.322-1.672V3a.75.75 0 01.75-.75A2.25 2.25 0 0116.5 4.5c0 1.152-.26 2.243-.723 3.218-.266.558.107 1.282.725 1.282h3.126c1.026 0 1.945.694 2.054 1.715.045.422.068.85.068 1.285a11.95 11.95 0 01-2.649 7.521c-.388.482-.987.729-1.605.729H13.48c-.483 0-.964-.078-1.423-.23l-3.114-1.04a4.501 4.501 0 00-1.423-.23H5.904M14.25 9h2.25M5.904 18.75c.083.205.173.405.27.602.197.4-.078.898-.523.898h-.908c-.889 0-1.713-.518-1.972-1.368a12 12 0 01-.521-3.507c0-1.553.295-3.036.831-4.398C3.387 10.203 4.167 9.75 5 9.75h1.053c.472 0 .745.556.5.96a8.958 8.958 0 00-1.302 4.665c0 1.194.232 2.333.654 3.375z',
+  hand: 'M10.05 4.575a1.575 1.575 0 10-3.15 0v3m3.15-3v-1.5a1.575 1.575 0 013.15 0v1.5m-3.15 0l.075 5.925m3.075.75V4.575m0 0a1.575 1.575 0 013.15 0V15M6.9 7.575a1.575 1.575 0 10-3.15 0v8.175a6.75 6.75 0 006.75 6.75h2.018a5.25 5.25 0 003.712-1.538l1.732-1.732a5.25 5.25 0 001.538-3.712l.003-2.024a.668.668 0 01.198-.471 1.575 1.575 0 10-2.228-2.228 3.818 3.818 0 00-1.12 2.687M6.9 7.575V12m6.27 4.318A4.49 4.49 0 0116.35 15m.002 0h-.002'
+};
+
+function Icon({ name, size = 18, className = '', strokeWidth = 1.5, style = {} }) {
+  const path = ICONS[name];
+  if (!path) return null;
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={strokeWidth} stroke="currentColor" width={size} height={size} className={className} style={{ flexShrink: 0, display: 'inline-block', ...style }}>
+      <path strokeLinecap="round" strokeLinejoin="round" d={path} />
+    </svg>
+  );
+}
+
 function CTACard({ icon, title, body, cta, onClick }) {
   return (
     <button onClick={onClick} className="surface rounded-xl p-5 text-left hover:opacity-90 transition-opacity flex flex-col h-full" style={{ borderLeft: '3px solid var(--secondary)' }}>
-      <div className="text-2xl mb-2">{icon}</div>
+      <div className="mb-2 text-secondary"><Icon name={icon} size={22} strokeWidth={1.5} /></div>
       <h3 className="font-semibold mb-1">{title}</h3>
       <p className="text-faint text-sm reading mb-3 flex-1" style={{ fontSize: '13px' }}>{body}</p>
       <span className="text-primary text-sm font-medium">{cta}</span>
@@ -407,14 +453,14 @@ function HeroCTAs({ onNav, data, actionItems }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       <CTACard
-        icon="✅"
+        icon="check"
         title="Action items from your last session"
         body={actionsBody}
         cta="Track your progress →"
         onClick={() => onNav('/actions')}
       />
       <CTACard
-        icon="📊"
+        icon="chart"
         title="Rate yourself on the scorecard"
         body={scoredBody}
         cta="Update your scores →"
@@ -427,7 +473,7 @@ function HeroCTAs({ onNav, data, actionItems }) {
 function EmptyState({ icon, title, body }) {
   return (
     <div className="surface rounded-2xl p-10 text-center">
-      <div className="text-4xl mb-4 opacity-50">{icon}</div>
+      <div className="mb-4 opacity-50 text-faint flex justify-center"><Icon name={icon || 'document'} size={36} strokeWidth={1.25} /></div>
       <h3 className="font-semibold text-lg mb-2">{title}</h3>
       <p className="text-dim text-sm max-w-md mx-auto reading" style={{ fontSize: '15px' }}>{body}</p>
     </div>
@@ -480,7 +526,7 @@ function LoginScreen({ sendMagicLink }) {
 
         {status === 'sent' ? (
           <div className="text-center py-6">
-            <div className="text-4xl mb-3">✉️</div>
+            <div className="mb-3 text-primary flex justify-center"><Icon name="envelope" size={36} strokeWidth={1.25} /></div>
             <h2 className="font-semibold text-lg mb-2">Check your email.</h2>
             <p className="text-dim text-sm reading">We sent a sign-in link to <strong>{email}</strong>. Click it from this device to land back here, signed in.</p>
             <button onClick={() => { setStatus('idle'); setEmail(''); }} className="text-primary text-sm mt-6 hover:underline">Use a different email</button>
@@ -509,19 +555,19 @@ function LoginScreen({ sendMagicLink }) {
    ===================================================================== */
 const NAV = [
   { section: 'WORKSPACE', items: [
-    { id: 'overview', icon: '🏠', label: 'Overview', route: '/overview' },
-    { id: 'actions', icon: '✅', label: 'Action Items', route: '/actions' },
-    { id: 'journal', icon: '📝', label: 'Journal', route: '/journal' },
-    { id: 'messages', icon: '💬', label: 'Messages', route: '/messages' },
+    { id: 'overview', icon: 'home', label: 'Overview', route: '/overview' },
+    { id: 'actions', icon: 'check', label: 'Action Items', route: '/actions' },
+    { id: 'journal', icon: 'pencil', label: 'Journal', route: '/journal' },
+    { id: 'messages', icon: 'chat', label: 'Messages', route: '/messages' },
   ]},
   { section: 'JOURNEY', items: [
-    { id: 'sessions', icon: '📅', label: 'Sessions', route: '/sessions' },
-    { id: 'growth', icon: '🌱', label: 'Growth', route: '/growth' },
-    { id: 'scorecard', icon: '📊', label: 'Scorecard', route: '/scorecard' },
-    { id: 'next', icon: '🚀', label: 'Next Quarter', route: '/next' },
+    { id: 'sessions', icon: 'calendar', label: 'Sessions', route: '/sessions' },
+    { id: 'growth', icon: 'sparkles', label: 'Growth', route: '/growth' },
+    { id: 'scorecard', icon: 'chart', label: 'Scorecard', route: '/scorecard' },
+    { id: 'next', icon: 'rocket', label: 'Next Quarter', route: '/next' },
   ]},
   { section: 'LIBRARY', items: [
-    { id: 'resources', icon: '📚', label: 'Resources', route: '/resources' },
+    { id: 'resources', icon: 'book', label: 'Resources', route: '/resources' },
   ]},
 ];
 
@@ -548,7 +594,7 @@ function Sidebar({ activeId, onNav, onSignOut, profile, badges = {} }) {
               const badge = badges[item.id];
               return (
                 <div key={item.id} className={'nav-item ' + (activeId === item.id ? 'active' : '')} onClick={() => onNav(item.route)}>
-                  <span className="icon">{item.icon}</span>
+                  <Icon name={item.icon} size={18} />
                   <span className="flex-1">{item.label}</span>
                   {badge > 0 && <span className="text-[10px] font-semibold rounded-full px-2 py-0.5" style={{ background: 'var(--secondary)', color: 'white' }}>{badge}</span>}
                 </div>
@@ -559,7 +605,7 @@ function Sidebar({ activeId, onNav, onSignOut, profile, badges = {} }) {
       </nav>
       <div className="p-3 border-t border-default">
         <div className="nav-item" onClick={onSignOut}>
-          <span className="icon">🚪</span><span>Sign Out</span>
+          <Icon name="logout" size={18} /><span>Sign Out</span>
         </div>
       </div>
     </aside>
@@ -579,11 +625,11 @@ function TopBar({ profile, onSearch, onToggleTheme, theme }) {
       </div>
       <div className="flex items-center gap-2">
         <button onClick={onSearch} className="surface-2 rounded-lg px-3 py-2 text-faint text-sm hide-mobile flex items-center gap-2 hover:opacity-80" style={{ minWidth: '220px', justifyContent: 'flex-start' }}>
-          🔍 <span>Search…</span>
+          <Icon name="search" size={16} /> <span>Search…</span>
           <span className="ml-auto text-xs px-1.5 py-0.5 rounded surface" style={{ borderRadius: '4px' }}>⌘K</span>
         </button>
-        <button onClick={onSearch} className="surface-2 w-9 h-9 rounded-lg flex items-center justify-center hide-desktop">🔍</button>
-        <button onClick={onToggleTheme} className="surface-2 w-9 h-9 rounded-lg flex items-center justify-center" title="Toggle theme">{theme === 'dark' ? '☀️' : '🌙'}</button>
+        <button onClick={onSearch} className="surface-2 w-9 h-9 rounded-lg flex items-center justify-center hide-desktop"><Icon name="search" size={18} /></button>
+        <button onClick={onToggleTheme} className="surface-2 w-9 h-9 rounded-lg flex items-center justify-center" title="Toggle theme"><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} /></button>
       </div>
     </header>
   );
@@ -591,19 +637,19 @@ function TopBar({ profile, onSearch, onToggleTheme, theme }) {
 
 function MobileBottomNav({ activeId, onNav }) {
   const tabs = [
-    { id: 'overview', icon: '🏠', label: 'Home', route: '/overview' },
-    { id: 'sessions', icon: '📅', label: 'Sessions', route: '/sessions' },
-    { id: 'actions', icon: '✅', label: 'Actions', route: '/actions' },
-    { id: 'growth', icon: '🌱', label: 'Growth', route: '/growth' },
-    { id: 'next', icon: '🚀', label: 'Next', route: '/next' },
-    { id: 'more', icon: '⋯', label: 'More', route: '/resources' },
+    { id: 'overview', icon: 'home', label: 'Home', route: '/overview' },
+    { id: 'sessions', icon: 'calendar', label: 'Sessions', route: '/sessions' },
+    { id: 'actions', icon: 'check', label: 'Actions', route: '/actions' },
+    { id: 'growth', icon: 'sparkles', label: 'Growth', route: '/growth' },
+    { id: 'next', icon: 'rocket', label: 'Next', route: '/next' },
+    { id: 'more', icon: 'ellipsis', label: 'More', route: '/resources' },
   ];
   const isActive = (id) => activeId === id || (id === 'more' && ['journal','messages','scorecard','resources'].includes(activeId));
   return (
     <nav className="mobile-bottom-nav fixed bottom-0 left-0 right-0 surface" style={{ borderRadius: 0, borderBottom: 0, borderLeft: 0, borderRight: 0, paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {tabs.map(t => (
         <div key={t.id} className={'mobile-tab ' + (isActive(t.id) ? 'active' : '')} onClick={() => onNav(t.route)}>
-          <span style={{ fontSize: '18px' }}>{t.icon}</span>
+          <Icon name={t.icon} size={20} />
           <span>{t.label}</span>
         </div>
       ))}
@@ -619,7 +665,7 @@ function SearchOverlay({ onClose, index, onNav }) {
   const inputRef = useRef(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
   const results = useMemo(() => search(q, index), [q, index]);
-  const typeIcon = { session: '📅', win: '🏆', edge: '🪜', quote: '💬', pattern: '🔄', action: '✅', priority: '🚀', resource: '📚' };
+  const typeIcon = { session: 'calendar', win: 'trophy', edge: 'trending', quote: 'chat', pattern: 'refresh', action: 'check', priority: 'rocket', resource: 'book' };
   return (
     <div className="search-backdrop" onClick={onClose}>
       <div className="surface rounded-2xl w-full max-w-2xl mx-4 fade-in" onClick={e => e.stopPropagation()}>
@@ -635,8 +681,8 @@ function SearchOverlay({ onClose, index, onNav }) {
             <p className="text-faint text-sm p-6 text-center">Nothing matched. Try shorter or different words.</p>
           )}
           {results.map((r, i) => (
-            <div key={i} onClick={() => { onNav(r.route); onClose(); }} className="p-3 rounded-lg hover:bg-primary-soft cursor-pointer flex gap-3">
-              <span className="text-lg flex-shrink-0">{typeIcon[r.type]}</span>
+            <div key={i} onClick={() => { onNav(r.route); onClose(); }} className="p-3 rounded-lg hover:bg-primary-soft cursor-pointer flex gap-3 items-start">
+              <span className="flex-shrink-0 text-faint mt-0.5"><Icon name={typeIcon[r.type] || 'document'} size={18} /></span>
               <div className="min-w-0">
                 <p className="font-medium truncate">{r.label}</p>
                 <p className="text-xs text-faint truncate">{r.sub}</p>
@@ -729,7 +775,7 @@ function OverviewView({ data, onNav, actionItems }) {
             )}
           </div>
         ) : (
-          <EmptyState icon="📅" title="Your first session is around the corner." body="The recap appears here within 24 hours of our session." />
+          <EmptyState icon="calendar" title="Your first session is around the corner." body="The recap appears here within 24 hours of our session." />
         )}
       </div>
 
@@ -768,6 +814,7 @@ function OverviewView({ data, onNav, actionItems }) {
       {/* Scorecard pulse */}
       <div>
         <SectionHeading sub="Three strongest, three still developing.">Scorecard Pulse</SectionHeading>
+      {/* note retained for context */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="surface rounded-xl p-5">
             <p className="text-xs tracking-widest text-faint mb-3">STRONGEST</p>
@@ -800,13 +847,13 @@ function OverviewView({ data, onNav, actionItems }) {
         <SectionHeading>Jump to</SectionHeading>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { icon: '📅', label: 'All Sessions', route: '/sessions' },
-            { icon: '✅', label: 'Action Items', route: '/actions' },
-            { icon: '🌱', label: 'Wins & Growth', route: '/growth' },
-            { icon: '📚', label: 'Resources', route: '/resources' },
+            { icon: 'calendar', label: 'All Sessions', route: '/sessions' },
+            { icon: 'check', label: 'Action Items', route: '/actions' },
+            { icon: 'sparkles', label: 'Wins & Growth', route: '/growth' },
+            { icon: 'book', label: 'Resources', route: '/resources' },
           ].map(t => (
             <div key={t.route} onClick={() => onNav(t.route)} className="surface-2 rounded-xl p-4 cursor-pointer hover:opacity-80 text-center">
-              <div className="text-2xl mb-1">{t.icon}</div>
+              <div className="mb-2 text-primary flex justify-center"><Icon name={t.icon} size={22} /></div>
               <div className="text-sm font-semibold">{t.label}</div>
             </div>
           ))}
@@ -840,7 +887,7 @@ function SessionsView({ data, onNav, route, unviewedIds = [] }) {
       <p className="text-dim mb-6 reading" style={{ fontSize: '15px' }}>Search the journey. Pull up any conversation.</p>
 
       <div className="surface rounded-xl p-3 mb-4 flex gap-2 flex-wrap items-center">
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 Search keyword (e.g. delegation, Amit, P&L)" className="input flex-1 min-w-[200px]" style={{ background: 'transparent', border: 'none', padding: '8px 12px' }} />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search keyword (e.g. delegation, Amit, P&L)" className="input flex-1 min-w-[200px]" style={{ background: 'transparent', border: 'none', padding: '8px 12px' }} />
         <select value={quarterFilter} onChange={e => setQuarterFilter(e.target.value)} className="input" style={{ width: 'auto' }}>
           <option value="all">All Quarters</option>
           {data.evolutionArc.map(a => <option key={a.id} value={a.id}>{a.label} — {a.title}</option>)}
@@ -848,7 +895,7 @@ function SessionsView({ data, onNav, route, unviewedIds = [] }) {
       </div>
 
       {sessions.length === 0 && (
-        <EmptyState icon="🔍" title="Nothing matched." body="Try a different word — or clear the filter to see everything." />
+        <EmptyState icon="search" title="Nothing matched." body="Try a different word — or clear the filter to see everything." />
       )}
 
       <div className="space-y-2">
@@ -860,7 +907,7 @@ function SessionsView({ data, onNav, route, unviewedIds = [] }) {
                 {s.title}
                 {unviewedSet.has(s.id) && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: 'var(--secondary)', color: 'white' }}>NEW</span>}
               </div>
-              <div className="text-xs text-faint mt-0.5">{s.theme}{s.durationMin ? ` · ${s.durationMin} min` : ''}{s.recordingUrl ? ' · 🎬 recording' : ''}</div>
+              <div className="text-xs text-faint mt-0.5 flex items-center gap-1.5">{s.theme}{s.durationMin ? ` · ${s.durationMin} min` : ''}{s.recordingUrl && <span className="inline-flex items-center gap-1"> · <Icon name="play" size={12} /> recording</span>}</div>
               {s.keyTakeaway && <p className="text-sm text-dim mt-2 italic">{s.keyTakeaway}</p>}
             </div>
             <div className="text-faint flex-shrink-0">→</div>
@@ -874,7 +921,7 @@ function SessionsView({ data, onNav, route, unviewedIds = [] }) {
 function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, markViewed }) {
   const session = data.sessions.find(s => s.id === sessionId);
   useEffect(() => { if (session && markViewed) markViewed(session.id); }, [session, markViewed]);
-  if (!session) return <EmptyState icon="❓" title="Session not found." body="The session you're looking for doesn't exist or hasn't been loaded yet." />;
+  if (!session) return <EmptyState icon="question" title="Session not found." body="The session you're looking for doesn't exist or hasn't been loaded yet." />;
 
   const sessionActions = actionItems.filter(a => a.sessionId === sessionId);
 
@@ -895,7 +942,7 @@ function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, m
 
       {session.recordingUrl && (
         <a href={session.recordingUrl} target="_blank" rel="noopener" className="inline-flex items-center gap-2 mb-8 px-4 py-2 rounded-lg surface hover:opacity-90 text-sm">
-          🎬 <span>Watch recording</span> <span className="text-faint">↗</span>
+          <Icon name="play" size={16} /> <span>Watch recording</span> <span className="text-faint">↗</span>
         </a>
       )}
 
@@ -912,15 +959,15 @@ function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, m
         </div>
       )}
 
-      {/* Feedback (👍/🤔/❌) — Phase 4 stub */}
+      {/* Feedback — Phase 4 stub */}
       <div className="surface rounded-2xl p-6 text-center">
-        <p className="text-dim text-sm mb-3">Did this session land?</p>
+        <p className="text-dim text-sm mb-4">Did this session land?</p>
         <div className="flex justify-center gap-3">
-          <button className="text-2xl hover:scale-110 transition-transform p-2" title="Landed">👍</button>
-          <button className="text-2xl hover:scale-110 transition-transform p-2" title="Mixed">🤔</button>
-          <button className="text-2xl hover:scale-110 transition-transform p-2" title="Missed">❌</button>
+          <button className="hover:scale-110 transition-transform p-3 rounded-lg surface-2 text-primary" title="Landed"><Icon name="thumbsUp" size={22} /></button>
+          <button className="hover:scale-110 transition-transform p-3 rounded-lg surface-2 text-secondary" title="Mixed"><Icon name="question" size={22} /></button>
+          <button className="hover:scale-110 transition-transform p-3 rounded-lg surface-2 text-faint" title="Missed"><Icon name="xmark" size={22} /></button>
         </div>
-        <p className="text-faint text-xs mt-3">Feedback channel opens in Phase 4 — for now this is a stub.</p>
+        <p className="text-faint text-xs mt-4">Feedback channel opens in Phase 4 — for now this is a stub.</p>
       </div>
     </div>
   );
@@ -979,7 +1026,7 @@ function ActionItemsView({ data, actionItems, cycleStatus }) {
       </div>
 
       {filtered.length === 0 ? (
-        <EmptyState icon="✅" title="Nothing here yet." body="Action items pulled from every session recap will appear here as commitments are made." />
+        <EmptyState icon="check" title="Nothing here yet." body="Action items pulled from every session recap will appear here as commitments are made." />
       ) : (
         <div className="space-y-2">
           {filtered.map(a => <ActionRow key={a.id} item={a} onCycle={() => cycleStatus(a.id)} />)}
@@ -1007,14 +1054,14 @@ function GrowthView({ data }) {
 
       <div className="flex gap-2 mb-6 flex-wrap border-b border-default pb-2">
         {[
-          { id: 'wins', label: '🏆 Wins', count: data.wins.length },
-          { id: 'edges', label: '🪜 Growth Edges', count: data.growthEdges.length },
-          { id: 'patterns', label: '🔄 Patterns', count: data.patterns.length },
-          { id: 'quotes', label: '💬 Quotes', count: data.quotes.length },
+          { id: 'wins', label: 'Wins', icon: 'trophy', count: data.wins.length },
+          { id: 'edges', label: 'Growth Edges', icon: 'trending', count: data.growthEdges.length },
+          { id: 'patterns', label: 'Patterns', icon: 'refresh', count: data.patterns.length },
+          { id: 'quotes', label: 'Quotes', icon: 'chat', count: data.quotes.length },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
-            className={'px-3 py-1.5 rounded-lg text-sm ' + (tab === t.id ? 'btn-primary' : 'hover:bg-primary-soft')}>
-            {t.label} <span className="text-xs opacity-70">({t.count})</span>
+            className={'px-3 py-1.5 rounded-lg text-sm inline-flex items-center gap-2 ' + (tab === t.id ? 'btn-primary' : 'hover:bg-primary-soft')}>
+            <Icon name={t.icon} size={15} /> {t.label} <span className="text-xs opacity-70">({t.count})</span>
           </button>
         ))}
       </div>
@@ -1192,7 +1239,7 @@ function ResourcesView({ data, onNav }) {
       {data.resources.map((folder) => (
         <div key={folder.folder} className="mb-8">
           <h3 className="text-sm font-semibold text-faint tracking-wide mb-3 flex items-center gap-2">
-            <span>{folder.icon}</span>
+            <Icon name={folder.icon} size={16} />
             <span>{folder.folder.toUpperCase()}</span>
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1237,7 +1284,7 @@ function ResourceDetailView({ data, resourceId, onNav }) {
     }
   }, [item]);
 
-  if (!item) return <EmptyState icon="❓" title="Document not found." body="This resource doesn't exist or hasn't been published yet." />;
+  if (!item) return <EmptyState icon="question" title="Document not found." body="This resource doesn't exist or hasn't been published yet." />;
 
   return (
     <div className="fade-in">
@@ -1249,7 +1296,7 @@ function ResourceDetailView({ data, resourceId, onNav }) {
       {(item.storagePath || item.pdfFile) && (
         <div className="surface rounded-2xl p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
-            <span className="text-2xl">📄</span>
+            <span className="text-primary"><Icon name="document" size={24} strokeWidth={1.5} /></span>
             <div>
               <p className="font-semibold text-sm">PDF attachment</p>
               <p className="text-faint text-xs">{item.pdfSize || ''}</p>
@@ -1300,7 +1347,7 @@ function JournalView({ data }) {
       <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>Reflections between sessions. <em className="text-secondary not-italic">Only you see this.</em></p>
 
       <EmptyState
-        icon="📝"
+        icon="pencil"
         title="Coming in Phase 2."
         body="Write entries, link them to sessions, tag by theme. The space where the inner work lands between conversations." />
     </div>
@@ -1318,7 +1365,7 @@ function MessagesView({ data }) {
       <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>Drop a question. Share a win. Flag something before next session.</p>
 
       <EmptyState
-        icon="💬"
+        icon="chat"
         title="Coming in Phase 3."
         body="Threaded coach ↔ coachee comms with email + WhatsApp delivery. For now — text Dhiren directly." />
     </div>
@@ -1411,7 +1458,7 @@ function App() {
   if (error === 'NO_DASHBOARD') return (
     <div className="login-bg min-h-screen flex items-center justify-center p-6">
       <div className="surface rounded-2xl p-10 max-w-md text-center">
-        <div className="text-4xl mb-3">🔒</div>
+        <div className="mb-3 text-faint flex justify-center"><Icon name="lock" size={36} strokeWidth={1.25} /></div>
         <h2 className="font-semibold text-lg mb-2">No dashboard for this email yet.</h2>
         <p className="text-faint text-sm mb-6 reading">You're signed in as <strong>{authedEmail}</strong>, but there's no coachee record under this address. Reach Dhiren if this is unexpected.</p>
         <button onClick={signOut} className="btn-primary px-5 py-2 rounded-lg font-semibold">Sign out</button>
@@ -1422,7 +1469,7 @@ function App() {
   if (error) return (
     <div className="min-h-screen flex items-center justify-center p-6">
       <div className="surface rounded-2xl p-8 max-w-md text-center">
-        <p className="text-2xl mb-3">⚠️</p>
+        <div className="mb-3 text-secondary flex justify-center"><Icon name="warning" size={32} /></div>
         <p className="font-semibold mb-2">Couldn't load coachee data.</p>
         <p className="text-faint text-sm">{error}</p>
       </div>
