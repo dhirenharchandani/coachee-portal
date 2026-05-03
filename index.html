@@ -432,11 +432,11 @@ function CTACard({ icon, title, body, cta, onClick }) {
   );
 }
 
-function ProposalSection({ proposal, profile }) {
+function ProposalSection({ proposal, profile, embedded }) {
   if (!proposal) return null;
   return (
     <div>
-      <SectionHeading sub="Designed around what's already moved.">{proposal.title || 'Next Chapter'}</SectionHeading>
+      {!embedded && <SectionHeading sub="Designed around what's already moved.">{proposal.title || 'Next Chapter'}</SectionHeading>}
       <div className="surface rounded-2xl p-6 md:p-8" style={{ borderTop: '2px solid var(--primary)' }}>
         <p className="text-faint text-xs tracking-widest mb-5">{profile.name.toUpperCase()} — INNER GAME COACHING</p>
 
@@ -939,8 +939,6 @@ function OverviewView({ data, onNav, actionItems }) {
         </div>
       </div>
 
-      {/* Investment Proposal — only renders if data.proposal exists */}
-      <ProposalSection proposal={data.proposal} profile={data.profile} />
     </div>
   );
 }
@@ -1367,6 +1365,19 @@ function ResourceDetailView({ data, resourceId, onNav }) {
   }, [item]);
 
   if (!item) return <EmptyState icon="question" title="Document not found." body="This resource doesn't exist or hasn't been published yet." />;
+
+  // Proposal-type resource → render proposal layout instead of standard doc layout
+  if (item.proposalData) {
+    return (
+      <div className="fade-in">
+        <button onClick={() => onNav('/resources')} className="text-primary text-sm mb-6 hover:underline flex items-center gap-1">← Library</button>
+        <p className="text-faint text-xs tracking-[0.2em] mb-2">{item.folder.toUpperCase()}</p>
+        <h1 className="text-3xl md:text-4xl font-bold mb-3">{item.title}</h1>
+        <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>{item.description}</p>
+        <ProposalSection proposal={item.proposalData} profile={data.profile} embedded={true} />
+      </div>
+    );
+  }
 
   return (
     <div className="fade-in">
