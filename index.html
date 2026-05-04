@@ -189,17 +189,11 @@ function useCoacheeData(authedEmail) {
   useEffect(() => {
     if (!authedEmail) return;
     if (sb) {
-      sb.from('coachees').select('data').ilike('email', authedEmail).single()
+      // RLS handles email + email_aliases matching — no client-side filter needed
+      sb.from('coachees').select('data').limit(1).maybeSingle()
         .then(({ data: row, error: err }) => {
-          if (err) {
-            // PGRST116 = no rows = no dashboard for this email
-            if (err.code === 'PGRST116') {
-              setError('NO_DASHBOARD');
-            } else {
-              setError(err.message);
-            }
-            return;
-          }
+          if (err) { setError(err.message); return; }
+          if (!row) { setError('NO_DASHBOARD'); return; }
           setData(row.data);
         });
     } else {
