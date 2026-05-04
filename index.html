@@ -625,6 +625,11 @@ function LoginScreen({ sendMagicLink }) {
 
         <p className="text-faint text-xs text-center mt-6">No password. Just a link in your inbox.</p>
       </div>
+      <p className="text-faint text-xs text-center mt-6">
+        Developed by InnerGame Consulting
+        {' · '}<a href="/privacy.html" className="hover:text-primary">Privacy</a>
+        {' · '}<a href="/terms.html" className="hover:text-primary">Terms</a>
+      </p>
     </div>
   );
 }
@@ -1524,6 +1529,7 @@ function AppShell({ data, signOut }) {
         <main className="flex-1 p-5 md:p-10 overflow-y-auto" key={route}>
           <div className="max-w-5xl mx-auto">
             {view}
+            <p className="text-faint text-xs text-center mt-16 pb-4">Developed by InnerGame Consulting</p>
           </div>
         </main>
       </div>
@@ -1556,6 +1562,11 @@ function App() {
         <p className="text-faint text-sm mb-6 reading">You're signed in as <strong>{authedEmail}</strong>, but there's no coachee record under this address. Reach Dhiren if this is unexpected.</p>
         <button onClick={signOut} className="btn-primary px-5 py-2 rounded-lg font-semibold">Sign out</button>
       </div>
+      <p className="text-faint text-xs text-center mt-6">
+        Developed by InnerGame Consulting
+        {' · '}<a href="/privacy.html" className="hover:text-primary">Privacy</a>
+        {' · '}<a href="/terms.html" className="hover:text-primary">Terms</a>
+      </p>
     </div>
   );
 

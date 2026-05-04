@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — InnerGame Coaching</title>
+<meta name="description" content="How the InnerGame Coaching dashboard handles your data.">
+<link rel="icon" type="image/png" href="data/files/favicon.png">
+<meta name="theme-color" content="#14111e">
+<style>
+  :root {
+    --bg: #14111e;
+    --surface: #1f1a2e;
+    --surface-2: #181425;
+    --border: #3d3651;
+    --text: #ede9f5;
+    --muted: #a39bbe;
+    --faint: #6f6884;
+    --accent: #a78bfa;
+    --amber: #b45309;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", Helvetica, Arial, sans-serif;
+    background:
+      radial-gradient(circle at 30% 20%, rgba(96,165,250,0.06), transparent 60%),
+      radial-gradient(circle at 70% 80%, rgba(217,119,6,0.05), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+    min-height: 100vh;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 56px 24px 96px; }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 36px; padding-bottom: 18px; border-bottom: 1px solid var(--border);
+  }
+  .brand { color: var(--text); text-decoration: none; font-size: 13px; letter-spacing: 0.18em; font-weight: 600; }
+  .brand .accent { color: var(--accent); }
+  header a.back { color: var(--muted); text-decoration: none; font-size: 14px; }
+  header a.back:hover { color: var(--accent); }
+  h1 { font-size: 30px; margin: 0 0 8px; line-height: 1.2; }
+  .updated { color: var(--muted); font-size: 14px; margin-bottom: 36px; }
+  h2 { font-size: 18px; margin: 36px 0 12px; color: var(--text); }
+  p, li { font-size: 15px; color: var(--text); }
+  ul { padding-left: 22px; }
+  ul li { margin-bottom: 6px; }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  code { background: var(--surface-2); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: var(--muted); }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin: 16px 0;
+  }
+  .lede { color: var(--muted); font-size: 16px; }
+  .lede strong { color: var(--text); }
+  footer {
+    text-align: center; color: var(--faint); font-size: 13px;
+    margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--border);
+  }
+  footer a { margin: 0 8px; color: var(--muted); text-decoration: none; }
+  footer a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <a class="brand" href="/">DH <span class="accent">·</span> INNERGAME COACHING</a>
+    <a class="back" href="/">← Back to dashboard</a>
+  </header>
+
+  <h1>Privacy Policy</h1>
+  <div class="updated">Last updated: May 4, 2026</div>
+
+  <p class="lede">The <strong>InnerGame Coaching dashboard</strong> is a private record of your coaching engagement with Dhiren Harchandani, operated by InnerGame Consulting. This page explains what data lives in it, how it's handled, and what control you have. Plain English over legalese.</p>
+
+  <h2>What's in your dashboard</h2>
+  <ul>
+    <li><strong>Your coaching record</strong> — session recaps, action items, wins, growth edges, recurring patterns, scorecard, next-quarter priorities, and resources from your sessions. This content is <em>authored by your coach</em> based on the work you do together.</li>
+    <li><strong>Engagement details</strong> — your name, the email used to sign in, your package and cadence, and the agreement (if you have one) shared as a PDF.</li>
+    <li><strong>Authentication metadata</strong> — Supabase records the timestamp and IP of each sign-in for security purposes. No password is stored, since sign-in is via magic link only.</li>
+  </ul>
+
+  <h2>What we don't do</h2>
+  <ul>
+    <li>No advertising trackers, no marketing pixels, no behavioural analytics.</li>
+    <li>No analysis of your data for any purpose other than rendering it back to you.</li>
+    <li>No sharing of your data with anyone outside InnerGame Consulting.</li>
+    <li>No cross-coachee visibility — row-level security policies in the database isolate your record so other clients cannot read it.</li>
+  </ul>
+
+  <h2>Where your data lives</h2>
+  <p>The dashboard is stored in a <a href="https://supabase.com">Supabase</a> Postgres database hosted in AWS Singapore (ap-southeast-1). Access is gated by row-level security on your email address — your magic-link session can only read the row keyed to it, and PDFs in the resources bucket are restricted to your folder. Backups of dashboard content are kept by InnerGame Consulting and not shared externally.</p>
+
+  <h2>Subprocessors we use</h2>
+  <div class="panel">
+    <ul>
+      <li><strong>Supabase</strong> — database, authentication, file storage, row-level security</li>
+      <li><strong>Resend</strong> — transactional email (sending sign-in links to your inbox)</li>
+      <li><strong>GitHub Pages</strong> — static hosting of the app shell at <code>dashboard.myinnergame.com</code></li>
+    </ul>
+  </div>
+  <p>Each processes data on our behalf under their own privacy terms. None receives your coaching content for any purpose other than the technical operation of the dashboard.</p>
+
+  <h2>Browser storage</h2>
+  <p>The only data the app stores in your browser is a Supabase auth token (so you stay signed in between visits) and small UI flags such as which sessions you've already viewed. No tracking cookies. No third-party storage.</p>
+
+  <h2>Your rights</h2>
+  <ul>
+    <li><strong>Access</strong> — your full dashboard is visible to you whenever you sign in.</li>
+    <li><strong>Correction</strong> — if anything in your record is wrong or you'd like a session re-summarized, message Dhiren directly.</li>
+    <li><strong>Deletion</strong> — when your coaching engagement ends, or at your request, we'll delete your dashboard and associated PDFs within 30 days. Email <a href="mailto:noreply@myinnergame.com">noreply@myinnergame.com</a> from your account email.</li>
+    <li><strong>Export</strong> — on request we'll send you a copy of your dashboard data as JSON, plus any PDFs in your resources folder.</li>
+  </ul>
+
+  <h2>Data retention</h2>
+  <p>Your dashboard remains available for as long as you're an active coaching client. After the engagement ends, the dashboard stays accessible for 90 days unless you ask us to remove it sooner, then is removed from the live database. Most-recent backups are pruned within an additional 60 days.</p>
+
+  <h2>Children</h2>
+  <p>This service is intended for adult coaching clients. We do not knowingly collect data from anyone under 18.</p>
+
+  <h2>Changes</h2>
+  <p>If we materially change how data is handled, we'll update this page and post a notice in the dashboard. The "last updated" date above always reflects the most recent revision.</p>
+
+  <h2>Contact</h2>
+  <p>Questions or requests: <a href="mailto:noreply@myinnergame.com">noreply@myinnergame.com</a>.</p>
+
+  <footer>
+    Developed by InnerGame Consulting ·
+    <a href="/privacy.html">Privacy</a> ·
+    <a href="/terms.html">Terms</a>
+  </footer>
+</main>
+</body>
+</html>
