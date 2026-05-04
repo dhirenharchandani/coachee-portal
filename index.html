@@ -4,8 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Inner Game Coaching — Dashboard</title>
-<link rel="icon" type="image/png" href="data/files/favicon.png" />
-<link rel="apple-touch-icon" href="data/files/favicon.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="data/files/favicon-16.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="data/files/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="data/files/favicon.png" />
+<link rel="apple-touch-icon" sizes="192x192" href="data/files/favicon.png" />
 <meta name="theme-color" content="#14111e" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -581,7 +583,7 @@ function LoginScreen({ sendMagicLink }) {
   };
 
   return (
-    <div className="login-bg min-h-screen flex items-center justify-center px-4">
+    <div className="login-bg min-h-screen flex flex-col items-center justify-center px-4">
       <div className="surface rounded-2xl p-10 max-w-md w-full fade-in">
         <div className="logo-lockup logo-lockup-lg mb-7">
           <div className="dh-mark">
@@ -1555,7 +1557,7 @@ function App() {
   if (!session) return <LoginScreen sendMagicLink={sendMagicLink} />;
 
   if (error === 'NO_DASHBOARD') return (
-    <div className="login-bg min-h-screen flex items-center justify-center p-6">
+    <div className="login-bg min-h-screen flex flex-col items-center justify-center p-6">
       <div className="surface rounded-2xl p-10 max-w-md text-center">
         <div className="mb-3 text-faint flex justify-center"><Icon name="lock" size={36} strokeWidth={1.25} /></div>
         <h2 className="font-semibold text-lg mb-2">No dashboard for this email yet.</h2>
