@@ -872,10 +872,7 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
           <div className="surface rounded-2xl p-6">
             {data.engagement.mode === 'retainer' ? (
               <div className="flex items-center justify-between flex-wrap gap-3">
-                <div>
-                  <p className="text-3xl font-bold text-primary">{data.profile.currentQuarter}</p>
-                  <p className="text-faint text-xs mt-1">Annual retainer · ongoing</p>
-                </div>
+                <p className="text-3xl font-bold text-primary">{data.profile.currentQuarter}</p>
                 <button onClick={() => onNav('/resource/agreement')} className="text-primary text-sm hover:underline">View agreement →</button>
               </div>
             ) : (
