@@ -186,15 +186,17 @@ const sb = USE_REAL_AUTH ? window.supabase.createClient(SUPABASE_URL, SUPABASE_A
 function useCoacheeData(authedEmail) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  const [rowEmail, setRowEmail] = useState(null);
   useEffect(() => {
     if (!authedEmail) return;
     if (sb) {
       // RLS handles email + email_aliases matching — no client-side filter needed
-      sb.from('coachees').select('data').limit(1).maybeSingle()
+      sb.from('coachees').select('email, data').limit(1).maybeSingle()
         .then(({ data: row, error: err }) => {
           if (err) { setError(err.message); return; }
           if (!row) { setError('NO_DASHBOARD'); return; }
           setData(row.data);
+          setRowEmail(row.email);
         });
     } else {
       // Fallback (no Supabase configured): read embedded JSON
@@ -204,7 +206,17 @@ function useCoacheeData(authedEmail) {
         .catch(e => setError(e.message));
     }
   }, [authedEmail]);
-  return { data, error };
+
+  // Patch a profile field locally + persist via RLS-gated UPDATE
+  const updateProfileField = async (key, value) => {
+    if (!data || !rowEmail || !sb) return;
+    const newData = { ...data, profile: { ...data.profile, [key]: value } };
+    setData(newData);
+    const { error: err } = await sb.from('coachees').update({ data: newData }).eq('email', rowEmail);
+    if (err) console.error('Update failed:', err);
+  };
+
+  return { data, error, updateProfileField };
 }
 
 /* =====================================================================
@@ -790,7 +802,42 @@ function SearchOverlay({ onClose, index, onNav }) {
 /* =====================================================================
    VIEW: OVERVIEW
    ===================================================================== */
-function OverviewView({ data, onNav, actionItems }) {
+function EditableYearWord({ value, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(value);
+  useEffect(() => { setVal(value); }, [value]);
+  const commit = () => {
+    const trimmed = val.trim();
+    if (!trimmed) { setVal(value); setEditing(false); return; }
+    if (trimmed !== value) onSave(trimmed);
+    setEditing(false);
+  };
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={val}
+        onChange={e => setVal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === 'Enter') commit();
+          if (e.key === 'Escape') { setVal(value); setEditing(false); }
+        }}
+        className="bg-transparent outline-none font-bold"
+        style={{ fontStyle: 'normal', borderBottom: '2px solid var(--primary)', minWidth: '8ch' }}
+      />
+    );
+  }
+  return (
+    <strong
+      onClick={() => setEditing(true)}
+      style={{ fontStyle: 'normal', cursor: 'pointer', borderBottom: '1px dashed currentColor', paddingBottom: '1px' }}
+      title="Click to edit"
+    >{value}</strong>
+  );
+}
+
+function OverviewView({ data, onNav, actionItems, updateProfileField }) {
   const lastSession = useMemo(() => [...data.sessions].reverse().find(s => s.summaryMd && !s.summaryMd.startsWith('_No recap')), [data]);
   const top3 = data.nextQuarter.slice(0, 3);
   const sortedScores = [...data.scorecard].sort((a, b) => b.score - a.score);
@@ -803,7 +850,7 @@ function OverviewView({ data, onNav, actionItems }) {
       <div>
         <p className="text-faint text-xs tracking-[0.2em] mb-2">{data.profile.themeBanner.toUpperCase()}</p>
         <h1 className="text-3xl md:text-4xl font-bold mb-3">Welcome back, {data.profile.preferredName}.</h1>
-        <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>The year word is <strong style={{ fontStyle: 'normal' }}>{data.profile.yearWord}</strong>. Make it visible.</p>
+        <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>The year word is <EditableYearWord value={data.profile.yearWord} onSave={v => updateProfileField && updateProfileField('yearWord', v)} />. Make it visible.</p>
       </div>
 
       {/* Hero CTAs */}
@@ -1526,7 +1573,7 @@ function AppShell({ data, signOut }) {
   const view = useMemo(() => {
     const parts = route.split('/').filter(Boolean);
     const seg = parts[0] || 'overview';
-    if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} />;
+    if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} />;
     if (seg === 'sessions') return <SessionsView data={data} onNav={go} route={route} unviewedIds={unviewedIds} />;
     if (seg === 'session' && parts[1]) return <SessionDetailView data={data} sessionId={parts[1]} onNav={go} actionItems={actionItems} cycleStatus={cycleStatus} markViewed={markViewed} />;
     if (seg === 'actions') return <ActionItemsView data={data} actionItems={actionItems} cycleStatus={cycleStatus} />;
@@ -1563,7 +1610,7 @@ function AppShell({ data, signOut }) {
    ===================================================================== */
 function App() {
   const { session, loading, sendMagicLink, signOut, authedEmail } = useAuth();
-  const { data, error } = useCoacheeData(authedEmail);
+  const { data, error, updateProfileField } = useCoacheeData(authedEmail);
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center">
