@@ -222,13 +222,18 @@ function useCoacheeData(authedEmail) {
     }
   };
 
-  // Patch a profile field locally + persist via RLS-gated UPDATE
-  const updateProfileField = async (key, value) => {
+  // Generic data updater — local state + RLS-gated UPDATE to the row
+  const updateData = async (newData) => {
     if (!data || !rowEmail || !sb) return;
-    const newData = { ...data, profile: { ...data.profile, [key]: value } };
-    setRows(rows.map(r => r.folder === activeRow.folder ? { ...r, data: newData } : r));
+    setRows(prev => prev.map(r => r.folder === activeRow.folder ? { ...r, data: newData } : r));
     const { error: err } = await sb.from('coachees').update({ data: newData }).eq('email', rowEmail);
     if (err) console.error('Update failed:', err);
+  };
+
+  // Patch a profile field locally + persist
+  const updateProfileField = async (key, value) => {
+    if (!data) return;
+    await updateData({ ...data, profile: { ...data.profile, [key]: value } });
   };
 
   // Compact list for switcher dropdown
@@ -238,7 +243,7 @@ function useCoacheeData(authedEmail) {
     preferredName: r.data?.profile?.preferredName,
   })) || [];
 
-  return { data, error, updateProfileField, coachees, activeFolder: activeRow?.folder, setActiveFolder };
+  return { data, error, updateProfileField, updateData, coachees, activeFolder: activeRow?.folder, setActiveFolder };
 }
 
 /* =====================================================================
@@ -280,38 +285,46 @@ function useViewedSessions(coacheeId, allSessionIds) {
   return { viewed, markViewed, unviewedCount: unviewedIds.length, unviewedIds };
 }
 
-function useActionStatus(coacheeId, baseItems) {
-  const key = `ig-actions-${coacheeId}`;
-  const [overrides, setOverrides] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; }
-  });
-  useEffect(() => { localStorage.setItem(key, JSON.stringify(overrides)); }, [overrides, key]);
-  const items = useMemo(() => baseItems.map(it => ({ ...it, status: overrides[it.id] || it.status })), [baseItems, overrides]);
+// Normalize any non-standard status value (e.g. legacy "open") to "pending"
+const normalizeStatus = (s) => (s === 'pending' || s === 'ongoing' || s === 'done') ? s : 'pending';
+
+function useActionStatus(data, updateData) {
+  const items = useMemo(
+    () => (data?.actionItems || []).map(it => ({ ...it, status: normalizeStatus(it.status) })),
+    [data?.actionItems]
+  );
   const cycleStatus = (id) => {
-    const cur = items.find(i => i.id === id)?.status;
-    const next = cur === 'pending' ? 'ongoing' : cur === 'ongoing' ? 'done' : 'pending';
-    setOverrides({ ...overrides, [id]: next });
+    if (!data) return;
+    const newActions = (data.actionItems || []).map(it => {
+      if (it.id !== id) return it;
+      const cur = normalizeStatus(it.status);
+      const next = cur === 'pending' ? 'ongoing' : cur === 'ongoing' ? 'done' : 'pending';
+      return { ...it, status: next };
+    });
+    updateData({ ...data, actionItems: newActions });
   };
   return [items, cycleStatus];
 }
 
-function usePriorityStatus(coacheeId, basePriorities) {
-  const key = `ig-priorities-${coacheeId}`;
-  const [overrides, setOverrides] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; }
-  });
-  useEffect(() => { localStorage.setItem(key, JSON.stringify(overrides)); }, [overrides, key]);
+function usePriorityStatus(data, updateData) {
   const items = useMemo(
-    () => (basePriorities || []).map(p => {
-      const id = p.id || `p-${p.number}`;
-      return { ...p, id, status: overrides[id] || p.status || 'pending' };
-    }),
-    [basePriorities, overrides]
+    () => (data?.nextQuarter || []).map(p => ({
+      ...p,
+      id: p.id || `p-${p.number}`,
+      status: normalizeStatus(p.status),
+    })),
+    [data?.nextQuarter]
   );
   const cyclePriority = (id) => {
-    const cur = items.find(p => p.id === id)?.status;
-    const next = cur === 'pending' ? 'ongoing' : cur === 'ongoing' ? 'done' : 'pending';
-    setOverrides({ ...overrides, [id]: next });
+    if (!data) return;
+    const newPriorities = (data.nextQuarter || []).map(p => {
+      const pid = p.id || `p-${p.number}`;
+      if (pid !== id) return p;
+      const cur = normalizeStatus(p.status);
+      const next = cur === 'pending' ? 'ongoing' : cur === 'ongoing' ? 'done' : 'pending';
+      return { ...p, id: pid, status: next };
+    });
+    updateData({ ...data, nextQuarter: newPriorities });
   };
   return [items, cyclePriority];
 }
@@ -1624,12 +1637,12 @@ function MessagesView({ data }) {
 /* =====================================================================
    APP SHELL
    ===================================================================== */
-function AppShell({ data, signOut, updateProfileField, coachees, activeFolder, setActiveFolder }) {
+function AppShell({ data, signOut, updateProfileField, updateData, coachees, activeFolder, setActiveFolder }) {
   const [route, go] = useHashRoute();
   const [theme, toggleTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
-  const [actionItems, cycleStatus] = useActionStatus(data.id, data.actionItems);
-  const [priorities, cyclePriority] = usePriorityStatus(data.id, data.nextQuarter);
+  const [actionItems, cycleStatus] = useActionStatus(data, updateData);
+  const [priorities, cyclePriority] = usePriorityStatus(data, updateData);
   const allSessionIds = useMemo(() => data.sessions.map(s => s.id), [data]);
   const { viewed, markViewed, unviewedCount, unviewedIds } = useViewedSessions(data.id, allSessionIds);
 
@@ -1696,7 +1709,7 @@ function AppShell({ data, signOut, updateProfileField, coachees, activeFolder, s
    ===================================================================== */
 function App() {
   const { session, loading, sendMagicLink, signOut, authedEmail } = useAuth();
-  const { data, error, updateProfileField, coachees, activeFolder, setActiveFolder } = useCoacheeData(authedEmail);
+  const { data, error, updateProfileField, updateData, coachees, activeFolder, setActiveFolder } = useCoacheeData(authedEmail);
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center">
@@ -1738,7 +1751,7 @@ function App() {
     </div>
   );
 
-  return <AppShell data={data} signOut={signOut} updateProfileField={updateProfileField} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />;
+  return <AppShell data={data} signOut={signOut} updateProfileField={updateProfileField} updateData={updateData} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
