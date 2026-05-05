@@ -823,26 +823,37 @@ function OverviewView({ data, onNav, actionItems }) {
         <div>
           <SectionHeading sub={`${data.engagement.cadence} · ${data.engagement.packageLabel}`}>Engagement Status</SectionHeading>
           <div className="surface rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-              <div>
-                <p className="text-3xl font-bold">
-                  <span className="text-primary">{data.engagement.remaining}</span>
-                  <span className="text-faint text-2xl"> of {data.engagement.contracted} sessions left</span>
-                </p>
-                <p className="text-faint text-xs mt-1">{data.engagement.completed} completed in {data.engagement.packageLabel.toLowerCase()}</p>
+            {data.engagement.mode === 'retainer' ? (
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <p className="text-3xl font-bold text-primary">{data.profile.currentQuarter}</p>
+                  <p className="text-faint text-xs mt-1">Annual retainer · ongoing</p>
+                </div>
+                <button onClick={() => onNav('/resource/agreement')} className="text-primary text-sm hover:underline">View agreement →</button>
               </div>
-              <button onClick={() => onNav('/resource/agreement')} className="text-primary text-sm hover:underline">View agreement →</button>
-            </div>
-            {/* Progress dots */}
-            <div className="flex gap-1.5">
-              {Array.from({ length: data.engagement.contracted }).map((_, i) => (
-                <div key={i} className="flex-1 h-2 rounded-full" style={{
-                  background: i < data.engagement.completed ? 'var(--primary)' : 'var(--surface-2)',
-                  opacity: i < data.engagement.completed ? 1 : 0.6
-                }}></div>
-              ))}
-            </div>
-            <p className="text-secondary italic text-xs mt-4 reading">Sessions are the container. Movement is the proof.</p>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                  <div>
+                    <p className="text-3xl font-bold">
+                      <span className="text-primary">{data.engagement.remaining}</span>
+                      <span className="text-faint text-2xl"> of {data.engagement.contracted} sessions left</span>
+                    </p>
+                    <p className="text-faint text-xs mt-1">{data.engagement.completed} completed in {data.engagement.packageLabel.toLowerCase()}</p>
+                  </div>
+                  <button onClick={() => onNav('/resource/agreement')} className="text-primary text-sm hover:underline">View agreement →</button>
+                </div>
+                <div className="flex gap-1.5">
+                  {Array.from({ length: data.engagement.contracted }).map((_, i) => (
+                    <div key={i} className="flex-1 h-2 rounded-full" style={{
+                      background: i < data.engagement.completed ? 'var(--primary)' : 'var(--surface-2)',
+                      opacity: i < data.engagement.completed ? 1 : 0.6
+                    }}></div>
+                  ))}
+                </div>
+                <p className="text-secondary italic text-xs mt-4 reading">Sessions are the container. Movement is the proof.</p>
+              </>
+            )}
           </div>
         </div>
       )}
