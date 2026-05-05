@@ -1539,7 +1539,7 @@ function MessagesView({ data }) {
 /* =====================================================================
    APP SHELL
    ===================================================================== */
-function AppShell({ data, signOut }) {
+function AppShell({ data, signOut, updateProfileField }) {
   const [route, go] = useHashRoute();
   const [theme, toggleTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1652,7 +1652,7 @@ function App() {
     </div>
   );
 
-  return <AppShell data={data} signOut={signOut} />;
+  return <AppShell data={data} signOut={signOut} updateProfileField={updateProfileField} />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
