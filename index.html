@@ -347,7 +347,7 @@ function buildSearchIndex(data) {
   data.quotes.forEach((q, i) => idx.push({ type: 'quote', label: q.text, sub: q.attribution, route: '/growth#quotes', body: q.text }));
   data.patterns.forEach((p) => idx.push({ type: 'pattern', label: p.label, sub: 'Recurring Pattern', route: '/growth#patterns', body: p.label }));
   data.actionItems.forEach(a => idx.push({ type: 'action', label: a.text, sub: 'Action Item · ' + a.status, route: '/actions', body: a.text + ' ' + (a.notes || '') }));
-  data.nextQuarter.forEach(p => idx.push({ type: 'priority', label: p.title, sub: 'Q3 Priority', route: '/next', body: p.body }));
+  data.nextQuarter.forEach(p => idx.push({ type: 'priority', label: p.title, sub: 'This Quarter', route: '/next', body: p.body }));
   data.resources.forEach(folder => folder.items.forEach(item => idx.push({ type: 'resource', label: item.title, sub: folder.folder, route: '/resources#' + item.id, body: item.description })));
   return idx;
 }
@@ -668,7 +668,7 @@ const NAV = [
     { id: 'sessions', icon: 'calendar', label: 'Sessions', route: '/sessions' },
     { id: 'growth', icon: 'sparkles', label: 'Growth', route: '/growth' },
     { id: 'scorecard', icon: 'chart', label: 'Scorecard', route: '/scorecard' },
-    { id: 'next', icon: 'rocket', label: 'Next Quarter', route: '/next' },
+    { id: 'next', icon: 'rocket', label: 'This Quarter', route: '/next' },
   ]},
   { section: 'LIBRARY', items: [
     { id: 'resources', icon: 'book', label: 'Resources', route: '/resources' },
@@ -1355,7 +1355,7 @@ function ScorecardView({ data }) {
 function NextQuarterView({ data }) {
   return (
     <div className="fade-in">
-      <p className="text-faint text-xs tracking-[0.2em] mb-2">NEXT QUARTER · {data.profile.currentQuarter.toUpperCase()}</p>
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">THIS QUARTER · {data.profile.currentQuarter.toUpperCase()}</p>
       <h1 className="text-3xl font-bold mb-2">Top {data.nextQuarter.length} Priorities</h1>
       <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>What we're building toward. <em className="text-secondary not-italic">Fewer would be sharper — but this is what we agreed.</em></p>
 
