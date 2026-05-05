@@ -850,7 +850,7 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
       <div>
         <p className="text-faint text-xs tracking-[0.2em] mb-2">{data.profile.themeBanner.toUpperCase()}</p>
         <h1 className="text-3xl md:text-4xl font-bold mb-3">Welcome back, {data.profile.preferredName}.</h1>
-        <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>The year word is <EditableYearWord value={data.profile.yearWord} onSave={v => updateProfileField && updateProfileField('yearWord', v)} />. Make it visible.</p>
+        <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>The theme of the year is <EditableYearWord value={data.profile.yearWord} onSave={v => updateProfileField && updateProfileField('yearWord', v)} />. Make it visible.</p>
       </div>
 
       {/* Hero CTAs */}
