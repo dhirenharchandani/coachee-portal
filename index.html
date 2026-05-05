@@ -184,39 +184,61 @@ const sb = USE_REAL_AUTH ? window.supabase.createClient(SUPABASE_URL, SUPABASE_A
    DATA LOAD — Supabase or fallback to embedded JSON
    ===================================================================== */
 function useCoacheeData(authedEmail) {
-  const [data, setData] = useState(null);
+  const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
-  const [rowEmail, setRowEmail] = useState(null);
+  const [activeFolder, setActiveFolderState] = useState(() => localStorage.getItem('ig-active-folder'));
+
   useEffect(() => {
     if (!authedEmail) return;
     if (sb) {
-      // RLS handles email + email_aliases matching — no client-side filter needed
-      sb.from('coachees').select('email, data').limit(1).maybeSingle()
-        .then(({ data: row, error: err }) => {
+      // RLS returns every row this user can access (own row + any aliased rows for coach mode)
+      sb.from('coachees').select('email, folder, data').order('folder')
+        .then(({ data: result, error: err }) => {
           if (err) { setError(err.message); return; }
-          if (!row) { setError('NO_DASHBOARD'); return; }
-          setData(row.data);
-          setRowEmail(row.email);
+          if (!result || result.length === 0) { setError('NO_DASHBOARD'); return; }
+          setRows(result);
         });
     } else {
-      // Fallback (no Supabase configured): read embedded JSON
       fetch('data/anshuman.json')
         .then(r => { if (!r.ok) throw new Error('Failed to load coachee data'); return r.json(); })
-        .then(setData)
+        .then(d => setRows([{ email: 'local', folder: 'local', data: d }]))
         .catch(e => setError(e.message));
     }
   }, [authedEmail]);
+
+  // Pick the active row: last-selected if available, else first
+  const activeRow = useMemo(() => {
+    if (!rows) return null;
+    return rows.find(r => r.folder === activeFolder) || rows[0];
+  }, [rows, activeFolder]);
+
+  const data = activeRow?.data || null;
+  const rowEmail = activeRow?.email || null;
+
+  const setActiveFolder = (folder) => {
+    if (rows?.find(r => r.folder === folder)) {
+      setActiveFolderState(folder);
+      localStorage.setItem('ig-active-folder', folder);
+    }
+  };
 
   // Patch a profile field locally + persist via RLS-gated UPDATE
   const updateProfileField = async (key, value) => {
     if (!data || !rowEmail || !sb) return;
     const newData = { ...data, profile: { ...data.profile, [key]: value } };
-    setData(newData);
+    setRows(rows.map(r => r.folder === activeRow.folder ? { ...r, data: newData } : r));
     const { error: err } = await sb.from('coachees').update({ data: newData }).eq('email', rowEmail);
     if (err) console.error('Update failed:', err);
   };
 
-  return { data, error, updateProfileField };
+  // Compact list for switcher dropdown
+  const coachees = rows?.map(r => ({
+    folder: r.folder,
+    name: r.data?.profile?.name,
+    preferredName: r.data?.profile?.preferredName,
+  })) || [];
+
+  return { data, error, updateProfileField, coachees, activeFolder: activeRow?.folder, setActiveFolder };
 }
 
 /* =====================================================================
@@ -428,7 +450,9 @@ const ICONS = {
   warning: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.008v.008H12v-.008z',
   xmark: 'M6 18L18 6M6 6l12 12',
   thumbsUp: 'M6.633 10.5c.806 0 1.533-.446 2.031-1.08a9.041 9.041 0 012.861-2.4c.723-.384 1.35-.956 1.653-1.715a4.498 4.498 0 00.322-1.672V3a.75.75 0 01.75-.75A2.25 2.25 0 0116.5 4.5c0 1.152-.26 2.243-.723 3.218-.266.558.107 1.282.725 1.282h3.126c1.026 0 1.945.694 2.054 1.715.045.422.068.85.068 1.285a11.95 11.95 0 01-2.649 7.521c-.388.482-.987.729-1.605.729H13.48c-.483 0-.964-.078-1.423-.23l-3.114-1.04a4.501 4.501 0 00-1.423-.23H5.904M14.25 9h2.25M5.904 18.75c.083.205.173.405.27.602.197.4-.078.898-.523.898h-.908c-.889 0-1.713-.518-1.972-1.368a12 12 0 01-.521-3.507c0-1.553.295-3.036.831-4.398C3.387 10.203 4.167 9.75 5 9.75h1.053c.472 0 .745.556.5.96a8.958 8.958 0 00-1.302 4.665c0 1.194.232 2.333.654 3.375z',
-  hand: 'M10.05 4.575a1.575 1.575 0 10-3.15 0v3m3.15-3v-1.5a1.575 1.575 0 013.15 0v1.5m-3.15 0l.075 5.925m3.075.75V4.575m0 0a1.575 1.575 0 013.15 0V15M6.9 7.575a1.575 1.575 0 10-3.15 0v8.175a6.75 6.75 0 006.75 6.75h2.018a5.25 5.25 0 003.712-1.538l1.732-1.732a5.25 5.25 0 001.538-3.712l.003-2.024a.668.668 0 01.198-.471 1.575 1.575 0 10-2.228-2.228 3.818 3.818 0 00-1.12 2.687M6.9 7.575V12m6.27 4.318A4.49 4.49 0 0116.35 15m.002 0h-.002'
+  hand: 'M10.05 4.575a1.575 1.575 0 10-3.15 0v3m3.15-3v-1.5a1.575 1.575 0 013.15 0v1.5m-3.15 0l.075 5.925m3.075.75V4.575m0 0a1.575 1.575 0 013.15 0V15M6.9 7.575a1.575 1.575 0 10-3.15 0v8.175a6.75 6.75 0 006.75 6.75h2.018a5.25 5.25 0 003.712-1.538l1.732-1.732a5.25 5.25 0 001.538-3.712l.003-2.024a.668.668 0 01.198-.471 1.575 1.575 0 10-2.228-2.228 3.818 3.818 0 00-1.12 2.687M6.9 7.575V12m6.27 4.318A4.49 4.49 0 0116.35 15m.002 0h-.002',
+  users: 'M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z',
+  'chevron-down': 'm19.5 8.25-7.5 7.5-7.5-7.5'
 };
 
 function Icon({ name, size = 18, className = '', strokeWidth = 1.5, style = {} }) {
@@ -716,7 +740,41 @@ function Sidebar({ activeId, onNav, onSignOut, profile, badges = {} }) {
   );
 }
 
-function TopBar({ profile, onSearch, onToggleTheme, theme }) {
+function CoacheeSwitcher({ coachees, activeFolder, setActiveFolder }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+  if (!coachees || coachees.length < 2) return null;
+  const active = coachees.find(c => c.folder === activeFolder) || coachees[0];
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen(o => !o)} className="surface-2 rounded-lg px-3 py-2 text-sm flex items-center gap-2 hover:opacity-80" title="Switch coachee">
+        <Icon name="users" size={16} />
+        <span className="truncate" style={{ maxWidth: '140px' }}>{active.preferredName || active.name}</span>
+        <Icon name="chevron-down" size={14} />
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 surface rounded-lg shadow-lg overflow-hidden z-50" style={{ minWidth: '220px' }}>
+          {coachees.map(c => (
+            <button key={c.folder}
+              onClick={() => { setActiveFolder(c.folder); setOpen(false); }}
+              className={`w-full text-left px-4 py-2.5 text-sm hover:bg-surface-2 ${c.folder === activeFolder ? 'text-primary font-semibold' : ''}`}
+              style={{ background: c.folder === activeFolder ? 'var(--primary-soft)' : 'transparent' }}
+            >
+              {c.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TopBar({ profile, onSearch, onToggleTheme, theme, coachees, activeFolder, setActiveFolder }) {
   const initial = profile.name.charAt(0);
   return (
     <header className="surface flex items-center justify-between gap-3 px-4 md:px-6 py-3 flex-shrink-0" style={{ borderRadius: 0, borderTop: 0, borderLeft: 0, borderRight: 0 }}>
@@ -728,6 +786,7 @@ function TopBar({ profile, onSearch, onToggleTheme, theme }) {
         </div>
       </div>
       <div className="flex items-center gap-2">
+        <CoacheeSwitcher coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />
         <button onClick={onSearch} className="surface-2 rounded-lg px-3 py-2 text-faint text-sm hide-mobile flex items-center gap-2 hover:opacity-80" style={{ minWidth: '220px', justifyContent: 'flex-start' }}>
           <Icon name="search" size={16} /> <span>Search…</span>
           <span className="ml-auto text-xs px-1.5 py-0.5 rounded surface" style={{ borderRadius: '4px' }}>⌘K</span>
@@ -1536,7 +1595,7 @@ function MessagesView({ data }) {
 /* =====================================================================
    APP SHELL
    ===================================================================== */
-function AppShell({ data, signOut, updateProfileField }) {
+function AppShell({ data, signOut, updateProfileField, coachees, activeFolder, setActiveFolder }) {
   const [route, go] = useHashRoute();
   const [theme, toggleTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1588,7 +1647,7 @@ function AppShell({ data, signOut, updateProfileField }) {
     <div className="flex min-h-screen">
       <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount }} />
       <div className="flex-1 flex flex-col main-content min-w-0">
-        <TopBar profile={data.profile} onSearch={() => setSearchOpen(true)} onToggleTheme={toggleTheme} theme={theme} />
+        <TopBar profile={data.profile} onSearch={() => setSearchOpen(true)} onToggleTheme={toggleTheme} theme={theme} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />
         <main className="flex-1 p-5 md:p-10 overflow-y-auto" key={route}>
           <div className="max-w-5xl mx-auto">
             {view}
@@ -1607,7 +1666,7 @@ function AppShell({ data, signOut, updateProfileField }) {
    ===================================================================== */
 function App() {
   const { session, loading, sendMagicLink, signOut, authedEmail } = useAuth();
-  const { data, error, updateProfileField } = useCoacheeData(authedEmail);
+  const { data, error, updateProfileField, coachees, activeFolder, setActiveFolder } = useCoacheeData(authedEmail);
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center">
@@ -1649,7 +1708,7 @@ function App() {
     </div>
   );
 
-  return <AppShell data={data} signOut={signOut} updateProfileField={updateProfileField} />;
+  return <AppShell data={data} signOut={signOut} updateProfileField={updateProfileField} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
