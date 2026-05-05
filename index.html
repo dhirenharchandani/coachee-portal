@@ -1671,7 +1671,7 @@ function AppShell({ data, signOut, updateProfileField, coachees, activeFolder, s
     if (seg === 'journal') return <JournalView data={data} />;
     if (seg === 'messages') return <MessagesView data={data} />;
     return <OverviewView data={data} onNav={go} />;
-  }, [route, data, actionItems]);
+  }, [route, data, actionItems, priorities]);
 
   return (
     <div className="flex min-h-screen">
