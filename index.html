@@ -295,6 +295,27 @@ function useActionStatus(coacheeId, baseItems) {
   return [items, cycleStatus];
 }
 
+function usePriorityStatus(coacheeId, basePriorities) {
+  const key = `ig-priorities-${coacheeId}`;
+  const [overrides, setOverrides] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(key) || '{}'); } catch { return {}; }
+  });
+  useEffect(() => { localStorage.setItem(key, JSON.stringify(overrides)); }, [overrides, key]);
+  const items = useMemo(
+    () => (basePriorities || []).map(p => {
+      const id = p.id || `p-${p.number}`;
+      return { ...p, id, status: overrides[id] || p.status || 'pending' };
+    }),
+    [basePriorities, overrides]
+  );
+  const cyclePriority = (id) => {
+    const cur = items.find(p => p.id === id)?.status;
+    const next = cur === 'pending' ? 'ongoing' : cur === 'ongoing' ? 'done' : 'pending';
+    setOverrides({ ...overrides, [id]: next });
+  };
+  return [items, cyclePriority];
+}
+
 /* =====================================================================
    ROUTING (hash-based)
    ===================================================================== */
@@ -1411,23 +1432,31 @@ function ScorecardView({ data }) {
 /* =====================================================================
    VIEW: NEXT QUARTER
    ===================================================================== */
-function NextQuarterView({ data }) {
+function NextQuarterView({ data, priorities, cyclePriority }) {
   return (
     <div className="fade-in">
       <p className="text-faint text-xs tracking-[0.2em] mb-2">THIS QUARTER · {data.profile.currentQuarter.toUpperCase()}</p>
-      <h1 className="text-3xl font-bold mb-2">Top {data.nextQuarter.length} Priorities</h1>
+      <h1 className="text-3xl font-bold mb-2">Top {priorities.length} Priorities</h1>
       <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>What we're building toward. <em className="text-secondary not-italic">Fewer would be sharper — but this is what we agreed.</em></p>
 
       <div className="space-y-3">
-        {data.nextQuarter.map(p => (
-          <div key={p.number} className="surface rounded-xl p-5 flex gap-4 items-start">
-            <span className="w-9 h-9 rounded-full flex items-center justify-center font-bold flex-shrink-0 text-white" style={{ background: 'var(--primary)' }}>{p.number}</span>
-            <div className="flex-1 min-w-0">
-              <h4 className="text-lg font-semibold mb-1.5">{p.title}</h4>
-              <p className="text-dim reading" style={{ fontSize: '15px' }}>{p.body}</p>
+        {priorities.map(p => {
+          const isDone = p.status === 'done';
+          const checkCls = isDone ? 'check done' : p.status === 'ongoing' ? 'check ongoing' : 'check';
+          const labelOpacity = isDone ? 'opacity-60 line-through' : '';
+          return (
+            <div key={p.id} className="surface rounded-xl p-5 flex gap-4 items-start">
+              <span className="w-9 h-9 rounded-full flex items-center justify-center font-bold flex-shrink-0 text-white" style={{ background: 'var(--primary)', opacity: isDone ? 0.5 : 1 }}>{p.number}</span>
+              <div className="flex-1 min-w-0">
+                <h4 className={`text-lg font-semibold mb-1.5 ${labelOpacity}`}>{p.title}</h4>
+                <p className={`text-dim reading ${isDone ? 'opacity-70' : ''}`} style={{ fontSize: '15px' }}>{p.body}</p>
+              </div>
+              <button onClick={() => cyclePriority(p.id)} className={checkCls} title={`Status: ${p.status}`}>
+                {isDone ? '✓' : p.status === 'ongoing' ? '◐' : ''}
+              </button>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -1600,6 +1629,7 @@ function AppShell({ data, signOut, updateProfileField, coachees, activeFolder, s
   const [theme, toggleTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
   const [actionItems, cycleStatus] = useActionStatus(data.id, data.actionItems);
+  const [priorities, cyclePriority] = usePriorityStatus(data.id, data.nextQuarter);
   const allSessionIds = useMemo(() => data.sessions.map(s => s.id), [data]);
   const { viewed, markViewed, unviewedCount, unviewedIds } = useViewedSessions(data.id, allSessionIds);
 
@@ -1635,7 +1665,7 @@ function AppShell({ data, signOut, updateProfileField, coachees, activeFolder, s
     if (seg === 'actions') return <ActionItemsView data={data} actionItems={actionItems} cycleStatus={cycleStatus} />;
     if (seg === 'growth') return <GrowthView data={data} />;
     if (seg === 'scorecard') return <ScorecardView data={data} />;
-    if (seg === 'next') return <NextQuarterView data={data} />;
+    if (seg === 'next') return <NextQuarterView data={data} priorities={priorities} cyclePriority={cyclePriority} />;
     if (seg === 'resources') return <ResourcesView data={data} onNav={go} />;
     if (seg === 'resource' && parts[1]) return <ResourceDetailView data={data} resourceId={parts[1]} onNav={go} />;
     if (seg === 'journal') return <JournalView data={data} />;
