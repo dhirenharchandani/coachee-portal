@@ -1301,8 +1301,8 @@ function NextQuarterView({ data }) {
   return (
     <div className="fade-in">
       <p className="text-faint text-xs tracking-[0.2em] mb-2">NEXT QUARTER · {data.profile.currentQuarter.toUpperCase()}</p>
-      <h1 className="text-3xl font-bold mb-2">Top 5 Priorities</h1>
-      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>What we're building toward. <em className="text-secondary not-italic">Five is the lazy version of three — but five is what we agreed.</em></p>
+      <h1 className="text-3xl font-bold mb-2">Top {data.nextQuarter.length} Priorities</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>What we're building toward. <em className="text-secondary not-italic">Fewer would be sharper — but this is what we agreed.</em></p>
 
       <div className="space-y-3">
         {data.nextQuarter.map(p => (
