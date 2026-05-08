@@ -941,7 +941,7 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
     <div className="fade-in space-y-10">
       {/* Hero */}
       <div>
-        <p className="text-faint text-xs tracking-[0.2em] mb-2">{data.profile.themeBanner.toUpperCase()}</p>
+        {data.profile.themeBanner && <p className="text-faint text-xs tracking-[0.2em] mb-2">{data.profile.themeBanner.toUpperCase()}</p>}
         <h1 className="text-3xl md:text-4xl font-bold mb-3">Welcome back, {data.profile.preferredName}.</h1>
         <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>The theme of the year is <EditableYearWord value={data.profile.yearWord} onSave={v => updateProfileField && updateProfileField('yearWord', v)} />. Make it visible.</p>
       </div>
@@ -961,7 +961,7 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
       {/* Engagement card */}
       {data.engagement && (
         <div>
-          <SectionHeading sub={`${data.engagement.cadence} · ${data.engagement.packageLabel}`}>Engagement Status</SectionHeading>
+          <SectionHeading sub={`${data.engagement.cadence} · ${data.engagement.packageLabel}`}>Engagement Rhythm</SectionHeading>
           <div className="surface rounded-2xl p-6">
             {data.engagement.mode === 'retainer' ? (
               <div className="flex items-center justify-between flex-wrap gap-3">
