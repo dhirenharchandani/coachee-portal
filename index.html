@@ -1003,7 +1003,9 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
             <div className="flex items-center justify-between mb-3">
               <div>
                 <p className="text-primary text-sm font-semibold">{lastSession.displayDate}</p>
-                <h3 className="text-xl font-bold mt-1">{lastSession.title}</h3>
+                {lastSession.title && lastSession.title !== lastSession.displayDate && !/^(\d{4}-\d{2}-\d{2}|(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s)/i.test(lastSession.title) && (
+                  <h3 className="text-xl font-bold mt-1">{lastSession.title}</h3>
+                )}
                 <p className="text-faint text-xs mt-1">{lastSession.theme}{lastSession.durationMin ? ` · ${lastSession.durationMin} min` : ''}</p>
               </div>
               <span className="text-faint">→</span>
