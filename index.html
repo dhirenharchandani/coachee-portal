@@ -1165,6 +1165,8 @@ function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, m
   if (!session) return <EmptyState icon="question" title="Session not found." body="The session you're looking for doesn't exist or hasn't been loaded yet." />;
 
   const sessionActions = actionItems.filter(a => a.sessionId === sessionId);
+  const sessionReflections = (data.journal || []).filter(j => j.linkedSessionId === sessionId)
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
   return (
     <div className="fade-in">
@@ -1197,6 +1199,26 @@ function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, m
           <div className="space-y-2">
             {sessionActions.map(a => <ActionRow key={a.id} item={a} onCycle={() => cycleStatus(a.id)} />)}
           </div>
+        </div>
+      )}
+
+      {sessionReflections.length > 0 && (
+        <div className="mb-8">
+          <SectionHeading sub="What landed for you between then and now.">Your reflections after this session</SectionHeading>
+          <div className="space-y-3">
+            {sessionReflections.map(r => (
+              <div key={r.id} className="surface rounded-xl p-4 border-l-2" style={{ borderColor: 'var(--primary)' }}>
+                <p className="text-faint text-xs tracking-[0.15em] mb-2">{formatJournalDate(r.createdAt)}</p>
+                <p className="reading whitespace-pre-wrap" style={{ fontSize: '15px', color: 'var(--text)' }}>{r.body}</p>
+                {r.tags?.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-3">
+                    {r.tags.map(t => <span key={t} className="px-2 py-0.5 rounded-full text-xs bg-primary-soft text-primary">#{t}</span>)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <button onClick={() => onNav('/journal')} className="text-primary text-sm mt-3 hover:underline">Open journal →</button>
         </div>
       )}
 
@@ -1599,19 +1621,279 @@ function ResourceDetailView({ data, resourceId, onNav }) {
 }
 
 /* =====================================================================
-   VIEW: JOURNAL (stub)
+   VIEW: JOURNAL
    ===================================================================== */
-function JournalView({ data }) {
+function formatJournalDate(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const yest = new Date(now); yest.setDate(now.getDate() - 1);
+  const isYest = d.toDateString() === yest.toDateString();
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (sameDay) return `Today · ${time}`;
+  if (isYest) return `Yesterday · ${time}`;
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString(undefined, sameYear
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function JournalComposer({ data, entry, onSave, onCancel }) {
+  const [body, setBody] = useState(entry?.body || '');
+  const [tags, setTags] = useState(entry?.tags || []);
+  const [tagInput, setTagInput] = useState('');
+  const [linkedSessionId, setLinkedSessionId] = useState(entry?.linkedSessionId || '');
+  const taRef = useRef(null);
+
+  useEffect(() => { if (taRef.current) taRef.current.focus(); }, []);
+
+  const tagSuggestions = useMemo(() => {
+    const fromEntries = (data.journal || []).flatMap(e => e.tags || []);
+    const fromPatterns = (data.patterns || []).map(p => p.label);
+    const all = [...new Set([...fromEntries, ...fromPatterns])];
+    const q = tagInput.trim().toLowerCase();
+    if (!q) return all.filter(t => !tags.includes(t)).slice(0, 8);
+    return all.filter(t => t.toLowerCase().includes(q) && !tags.includes(t)).slice(0, 8);
+  }, [data, tags, tagInput]);
+
+  const recentSessions = useMemo(() => [...data.sessions].reverse().slice(0, 12), [data]);
+
+  const addTag = (t) => {
+    const clean = t.trim().replace(/^#/, '');
+    if (!clean || tags.includes(clean)) { setTagInput(''); return; }
+    setTags([...tags, clean]);
+    setTagInput('');
+  };
+  const removeTag = (t) => setTags(tags.filter(x => x !== t));
+  const onTagKey = (e) => {
+    if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addTag(tagInput); }
+    else if (e.key === 'Backspace' && !tagInput && tags.length) { removeTag(tags[tags.length - 1]); }
+  };
+
+  const submit = () => {
+    const trimmed = body.trim();
+    if (!trimmed) return;
+    onSave({ body: trimmed, tags, linkedSessionId: linkedSessionId || null });
+  };
+
+  return (
+    <div className="surface rounded-2xl p-5 md:p-6 mb-6">
+      <textarea
+        ref={taRef}
+        value={body}
+        onChange={e => setBody(e.target.value)}
+        placeholder="What's landing for you right now?"
+        rows={5}
+        className="w-full bg-transparent resize-none outline-none reading"
+        style={{ fontSize: '16px', lineHeight: 1.7, color: 'var(--text)' }}
+      />
+
+      {tags.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-3">
+          {tags.map(t => (
+            <span key={t} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-primary-soft text-primary">
+              #{t}
+              <button onClick={() => removeTag(t)} className="hover:opacity-70" title="Remove tag"><Icon name="xmark" size={12} /></button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3 relative">
+        <div className="flex items-center gap-2">
+          <Icon name="sparkles" size={14} className="text-faint" />
+          <input
+            value={tagInput}
+            onChange={e => setTagInput(e.target.value)}
+            onKeyDown={onTagKey}
+            placeholder="Add a theme — Enter to confirm"
+            className="flex-1 bg-transparent text-sm outline-none"
+            style={{ color: 'var(--text)' }}
+          />
+        </div>
+        {tagInput && tagSuggestions.length > 0 && (
+          <div className="absolute z-10 mt-1 surface rounded-lg p-1 max-w-full">
+            {tagSuggestions.map(s => (
+              <button key={s} onClick={() => addTag(s)} className="block w-full text-left px-3 py-1.5 text-sm hover:bg-primary-soft rounded">#{s}</button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 pt-4 border-t border-default flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+        <div className="flex items-center gap-2 text-sm">
+          <Icon name="calendar" size={14} className="text-faint" />
+          <select
+            value={linkedSessionId}
+            onChange={e => setLinkedSessionId(e.target.value)}
+            className="bg-transparent text-sm outline-none cursor-pointer"
+            style={{ color: 'var(--text-dim)' }}
+          >
+            <option value="">Not linked to a session</option>
+            {recentSessions.map(s => (
+              <option key={s.id} value={s.id}>{s.displayDate} — {s.title}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex gap-2 justify-end">
+          {onCancel && (
+            <button onClick={onCancel} className="px-4 py-2 rounded-lg text-sm hover:bg-primary-soft">Cancel</button>
+          )}
+          <button onClick={submit} disabled={!body.trim()} className="btn-primary px-5 py-2 rounded-lg text-sm font-semibold disabled:opacity-50">
+            {entry ? 'Save changes' : 'Save entry'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function JournalEntryCard({ entry, sessionLabel, onEdit, onDelete, onJumpSession }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  return (
+    <div className="surface rounded-2xl p-5 md:p-6">
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <p className="text-faint text-xs tracking-[0.15em]">{formatJournalDate(entry.createdAt)}</p>
+        <div className="flex items-center gap-1 text-faint">
+          <button onClick={onEdit} className="p-1.5 rounded hover:bg-primary-soft hover:text-primary" title="Edit"><Icon name="pencil" size={14} /></button>
+          {confirmDel ? (
+            <>
+              <button onClick={() => onDelete()} className="text-xs px-2 py-1 rounded text-secondary hover:opacity-80" title="Confirm delete">Delete?</button>
+              <button onClick={() => setConfirmDel(false)} className="p-1.5 rounded hover:bg-primary-soft" title="Keep"><Icon name="xmark" size={14} /></button>
+            </>
+          ) : (
+            <button onClick={() => setConfirmDel(true)} className="p-1.5 rounded hover:bg-primary-soft" title="Delete"><Icon name="xmark" size={14} /></button>
+          )}
+        </div>
+      </div>
+
+      <p className="reading whitespace-pre-wrap" style={{ fontSize: '16px', color: 'var(--text)' }}>{entry.body}</p>
+
+      {(entry.tags?.length > 0 || sessionLabel) && (
+        <div className="flex flex-wrap items-center gap-2 mt-4 pt-3 border-t border-default">
+          {entry.tags?.map(t => (
+            <span key={t} className="px-2.5 py-0.5 rounded-full text-xs bg-primary-soft text-primary">#{t}</span>
+          ))}
+          {sessionLabel && (
+            <button onClick={onJumpSession} className="ml-auto inline-flex items-center gap-1.5 text-xs text-secondary hover:underline">
+              <Icon name="calendar" size={12} /> {sessionLabel}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JournalView({ data, updateData, onNav }) {
+  const entries = data.journal || [];
+  const [composing, setComposing] = useState(entries.length === 0);
+  const [editingId, setEditingId] = useState(null);
+  const [tagFilter, setTagFilter] = useState(null);
+  const [q, setQ] = useState('');
+
+  const sessionLookup = useMemo(() => Object.fromEntries(data.sessions.map(s => [s.id, s])), [data]);
+
+  const allTags = useMemo(() => {
+    const counts = {};
+    entries.forEach(e => (e.tags || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; }));
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [entries]);
+
+  const filtered = useMemo(() => {
+    let list = [...entries].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    if (tagFilter) list = list.filter(e => (e.tags || []).includes(tagFilter));
+    const query = q.trim().toLowerCase();
+    if (query) list = list.filter(e =>
+      (e.body || '').toLowerCase().includes(query) ||
+      (e.tags || []).some(t => t.toLowerCase().includes(query))
+    );
+    return list;
+  }, [entries, tagFilter, q]);
+
+  const persist = async (newEntries) => {
+    await updateData({ ...data, journal: newEntries });
+  };
+
+  const saveNew = async (payload) => {
+    const newEntry = {
+      id: 'j_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      createdAt: new Date().toISOString(),
+      ...payload,
+    };
+    await persist([newEntry, ...entries]);
+    setComposing(false);
+  };
+
+  const saveEdit = async (id, payload) => {
+    await persist(entries.map(e => e.id === id ? { ...e, ...payload, updatedAt: new Date().toISOString() } : e));
+    setEditingId(null);
+  };
+
+  const remove = async (id) => {
+    await persist(entries.filter(e => e.id !== id));
+  };
+
   return (
     <div className="fade-in">
       <p className="text-faint text-xs tracking-[0.2em] mb-2">JOURNAL</p>
-      <h1 className="text-3xl font-bold mb-2">Your Private Space</h1>
-      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>Reflections between sessions. <em className="text-secondary not-italic">Only you see this.</em></p>
+      <h1 className="text-3xl font-bold mb-2">Between Sessions.</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>Where the work keeps moving. <em className="text-secondary not-italic">Only you see this.</em></p>
 
-      <EmptyState
-        icon="pencil"
-        title="Coming in Phase 2."
-        body="Write entries, link them to sessions, tag by theme. The space where the inner work lands between conversations." />
+      {!composing && !editingId && (
+        <button onClick={() => setComposing(true)} className="surface rounded-2xl p-5 mb-6 w-full text-left hover:opacity-90 transition-opacity flex items-center gap-3 text-dim">
+          <Icon name="pencil" size={18} className="text-primary" />
+          <span className="reading" style={{ fontSize: '15px' }}>Begin.</span>
+        </button>
+      )}
+
+      {composing && (
+        <JournalComposer data={data} onSave={saveNew} onCancel={entries.length > 0 ? () => setComposing(false) : null} />
+      )}
+
+      {entries.length > 0 && !composing && (
+        <div className="flex flex-col md:flex-row md:items-center gap-3 mb-5">
+          <div className="surface rounded-lg flex items-center gap-2 px-3 py-2 flex-1 min-w-0">
+            <Icon name="search" size={14} className="text-faint" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search entries"
+              className="flex-1 bg-transparent text-sm outline-none min-w-0" style={{ color: 'var(--text)' }} />
+            {q && <button onClick={() => setQ('')} className="text-faint hover:text-primary"><Icon name="xmark" size={12} /></button>}
+          </div>
+        </div>
+      )}
+
+      {allTags.length > 0 && !composing && (
+        <div className="flex gap-2 flex-wrap mb-6">
+          <button onClick={() => setTagFilter(null)}
+            className={'px-3 py-1 rounded-full text-xs ' + (tagFilter === null ? 'btn-primary' : 'surface hover:opacity-80 text-dim')}>
+            All <span className="opacity-70">({entries.length})</span>
+          </button>
+          {allTags.map(([t, count]) => (
+            <button key={t} onClick={() => setTagFilter(t === tagFilter ? null : t)}
+              className={'px-3 py-1 rounded-full text-xs ' + (tagFilter === t ? 'btn-primary' : 'surface hover:opacity-80 text-dim')}>
+              #{t} <span className="opacity-70">({count})</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {entries.length === 0 && !composing ? null : filtered.length === 0 ? (
+        <EmptyState icon="search" title="Nothing matched." body="Clear the filter or search to see every entry." />
+      ) : (
+        <div className="space-y-4">
+          {filtered.map(e => editingId === e.id ? (
+            <JournalComposer key={e.id} data={data} entry={e}
+              onSave={(payload) => saveEdit(e.id, payload)}
+              onCancel={() => setEditingId(null)} />
+          ) : (
+            <JournalEntryCard key={e.id} entry={e}
+              sessionLabel={e.linkedSessionId && sessionLookup[e.linkedSessionId]?.displayDate}
+              onEdit={() => setEditingId(e.id)}
+              onDelete={() => remove(e.id)}
+              onJumpSession={() => onNav(`/session/${e.linkedSessionId}`)} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1681,7 +1963,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, act
     if (seg === 'next') return <NextQuarterView data={data} priorities={priorities} cyclePriority={cyclePriority} />;
     if (seg === 'resources') return <ResourcesView data={data} onNav={go} />;
     if (seg === 'resource' && parts[1]) return <ResourceDetailView data={data} resourceId={parts[1]} onNav={go} />;
-    if (seg === 'journal') return <JournalView data={data} />;
+    if (seg === 'journal') return <JournalView data={data} updateData={updateData} onNav={go} />;
     if (seg === 'messages') return <MessagesView data={data} />;
     return <OverviewView data={data} onNav={go} />;
   }, [route, data, actionItems, priorities]);
