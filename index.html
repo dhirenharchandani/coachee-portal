@@ -180,6 +180,11 @@ const SUPABASE_ANON_KEY = "sb_publishable_xEPPs63vVVCELKyb0WrDtQ_qAAnvErH";
 const USE_REAL_AUTH = !!(SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase);
 const sb = USE_REAL_AUTH ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
+// Localhost-only mock mode — load data/_preview/<folder>.json without auth.
+// Only active on localhost; production ignores the ?mock query param.
+const IS_LOCALHOST = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+const MOCK_FOLDER = IS_LOCALHOST ? new URLSearchParams(location.search).get('mock') : null;
+
 /* =====================================================================
    DATA LOAD — Supabase or fallback to embedded JSON
    ===================================================================== */
@@ -190,6 +195,14 @@ function useCoacheeData(authedEmail) {
 
   useEffect(() => {
     if (!authedEmail) return;
+    if (MOCK_FOLDER) {
+      // Localhost preview — load from disk, skip Supabase
+      fetch(`data/_preview/${MOCK_FOLDER}.json`)
+        .then(r => { if (!r.ok) throw new Error(`No mock data for "${MOCK_FOLDER}"`); return r.json(); })
+        .then(d => setRows([{ email: `mock-${MOCK_FOLDER}`, folder: MOCK_FOLDER, data: d }]))
+        .catch(e => setError(e.message));
+      return;
+    }
     if (sb) {
       // RLS returns every row this user can access (own row + any aliased rows for coach mode)
       sb.from('coachees').select('email, folder, data').order('folder')
@@ -351,6 +364,12 @@ function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (MOCK_FOLDER) {
+      // Localhost preview — fake an authed user, bypass Supabase auth
+      setSession({ user: { email: `preview-${MOCK_FOLDER}@local` } });
+      setLoading(false);
+      return;
+    }
     if (!sb) {
       // Fallback soft auth for preview-without-keys
       const fake = sessionStorage.getItem('ig-authed-email');
@@ -963,34 +982,59 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
         <div>
           <SectionHeading sub={`${data.engagement.cadence} · ${data.engagement.packageLabel}`}>Engagement Rhythm</SectionHeading>
           <div className="surface rounded-2xl p-6">
-            {data.engagement.mode === 'retainer' ? (
+            {data.engagement.mode === 'retainer' && !data.engagement.milestones ? (
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <p className="text-3xl font-bold text-primary">{data.profile.currentQuarter}</p>
                 <button onClick={() => onNav('/resource/agreement')} className="text-primary text-sm hover:underline">View agreement →</button>
               </div>
-            ) : (
-              <>
-                <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-                  <div>
-                    <p className="text-3xl font-bold">
-                      <span className="text-primary">{data.engagement.remaining}</span>
-                      <span className="text-faint text-2xl"> of {data.engagement.contracted} sessions left</span>
-                    </p>
-                    <p className="text-faint text-xs mt-1">{data.engagement.completed} completed in {data.engagement.packageLabel.toLowerCase()}</p>
+            ) : (() => {
+              const milestones = data.engagement.milestones;
+              const total = milestones ? milestones.length : data.engagement.contracted;
+              const done = milestones ? milestones.filter(m => m.status === 'done').length : data.engagement.completed;
+              const left = total - done;
+              return (
+                <>
+                  <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                    <div>
+                      <p className="text-3xl font-bold">
+                        <span className="text-primary">{left}</span>
+                        <span className="text-faint text-2xl"> of {total} {milestones ? 'left' : 'sessions left'}</span>
+                      </p>
+                      <p className="text-faint text-xs mt-1">{done} completed in {data.engagement.packageLabel.toLowerCase()}</p>
+                    </div>
+                    <button onClick={() => onNav('/resource/agreement')} className="text-primary text-sm hover:underline">View agreement →</button>
                   </div>
-                  <button onClick={() => onNav('/resource/agreement')} className="text-primary text-sm hover:underline">View agreement →</button>
-                </div>
-                <div className="flex gap-1.5">
-                  {Array.from({ length: data.engagement.contracted }).map((_, i) => (
-                    <div key={i} className="flex-1 h-2 rounded-full" style={{
-                      background: i < data.engagement.completed ? 'var(--primary)' : 'var(--surface-2)',
-                      opacity: i < data.engagement.completed ? 1 : 0.6
-                    }}></div>
-                  ))}
-                </div>
-                <p className="text-secondary italic text-xs mt-4 reading">Sessions are the container. Movement is the proof.</p>
-              </>
-            )}
+
+                  {milestones ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 sm:grid-flow-col gap-2 mt-2"
+                         style={{ gridTemplateRows: `repeat(${Math.ceil(milestones.length / 2)}, minmax(0, 1fr))` }}>
+                      {milestones.map((m, i) => {
+                        const isDone = m.status === 'done';
+                        return (
+                          <div key={i} className="flex items-center gap-3 px-3 py-2 rounded-lg surface-2">
+                            <span className={'check ' + (isDone ? 'done' : '')} style={{ width: 16, height: 16 }}>
+                              {isDone ? '✓' : ''}
+                            </span>
+                            <span className={'text-sm ' + (isDone ? 'text-primary font-semibold' : 'text-dim')}>{m.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="flex gap-1.5">
+                      {Array.from({ length: data.engagement.contracted }).map((_, i) => (
+                        <div key={i} className="flex-1 h-2 rounded-full" style={{
+                          background: i < data.engagement.completed ? 'var(--primary)' : 'var(--surface-2)',
+                          opacity: i < data.engagement.completed ? 1 : 0.6
+                        }}></div>
+                      ))}
+                    </div>
+                  )}
+
+                  <p className="text-secondary italic text-xs mt-4 reading">Sessions are the container. Movement is the proof.</p>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}
