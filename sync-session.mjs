@@ -137,7 +137,14 @@ const months = (maxD.getUTCFullYear() - minD.getUTCFullYear()) * 12 + (maxD.getU
 const quarterSet = new Set(sessions.map(s => s.quarter));
 const stats = { ...(data.stats || {}), sessions: sessions.length, recapped: `${recapped}/${sessions.length}`, months, quarters: quarterSet.size };
 
-// 6. Update monthChart
+// 6. Update engagement counters — subtract 1 from remaining, add 1 to completed
+const engagement = data.engagement ? { ...data.engagement } : null;
+if (engagement && typeof engagement.remaining === 'number' && engagement.remaining > 0) {
+  engagement.remaining -= 1;
+  engagement.completed = (engagement.completed || 0) + 1;
+}
+
+// 7. Update monthChart
 const monthChart = (data.monthChart || []).slice();
 const newMonthLabel = displayDate(date).match(/^(\w+)/)[1] + " '" + date.slice(2, 4);
 const monthIdx = monthChart.findIndex(m => m.label === newMonthLabel || m.label === newMonthLabel.split(' ')[0]);
@@ -152,6 +159,7 @@ const newData = {
   quotes: [...existingQuotes, ...newQuotes],
   stats,
   monthChart,
+  ...(engagement ? { engagement } : {}),
 };
 
 const lit = JSON.stringify(newData).replace(/'/g, "''");
