@@ -82,8 +82,11 @@ function show(rows) {
       bucket_id <> 'resources'
       OR EXISTS (
         SELECT 1 FROM public.coachees c
-        WHERE lower(c.email) = lower(auth.email())
-          AND (storage.foldername(name))[1] = c.folder
+        WHERE (
+          lower(c.email) = lower(auth.email())
+          OR lower(auth.email()) IN (SELECT lower(unnest(c.email_aliases)))
+        )
+        AND (storage.foldername(name))[1] = c.folder
       )
     );
   `);
