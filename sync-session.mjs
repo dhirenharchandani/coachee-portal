@@ -92,91 +92,127 @@ const session = {
   recordingUrl: null,
 };
 
-// Fetch the row, mutate, write back
-const cur = await sql(`SELECT data FROM public.coachees WHERE folder='${folder}';`);
-if (!cur.length) { console.error(`No coachee row for folder='${folder}'`); process.exit(1); }
-const data = cur[0].data;
+// Pure mutation: takes current data, returns { newData, addedCounts } — no side effects
+function applyMutation(data) {
+  // 1. Sessions — replace any prior with same id, then sort
+  const sessions = (data.sessions || []).filter(s => s.id !== session.id).concat([session])
+    .sort((a, b) => a.date.localeCompare(b.date));
 
-// 1. Sessions — replace any prior with same id, then sort
-const sessions = (data.sessions || []).filter(s => s.id !== session.id).concat([session])
-  .sort((a, b) => a.date.localeCompare(b.date));
+  // 2. Action items — assign IDs + sessionId, append
+  const existingActions = data.actionItems || [];
+  const startN = Math.max(0, ...existingActions.map(a => parseInt((a.id || '').replace(/[^0-9]/g, '')) || 0)) + 1;
+  const newActions = actionItems.map((a, i) => ({
+    id: `ai-${String(startN + i).padStart(3, '0')}`,
+    sessionId: session.id,
+    category: a.category || 'general',
+    status: a.status || 'pending',
+    text: a.text,
+  }));
 
-// 2. Action items — assign IDs + sessionId, append
-const existingActions = data.actionItems || [];
-const startN = Math.max(0, ...existingActions.map(a => parseInt((a.id || '').replace(/[^0-9]/g, '')) || 0)) + 1;
-const newActions = actionItems.map((a, i) => ({
-  id: `ai-${String(startN + i).padStart(3, '0')}`,
-  sessionId: session.id,
-  category: a.category || 'general',
-  status: a.status || 'pending',
-  text: a.text,
-}));
+  // 3. Patterns — append, dedupe by label
+  const existingPatterns = data.patterns || [];
+  const existingLabels = new Set(existingPatterns.map(p => p.label));
+  const newPatterns = patterns.filter(p => !existingLabels.has(p.label)).map(p => ({
+    label: p.label,
+    color: p.color || '#a78bfa',
+  }));
 
-// 3. Patterns — append, dedupe by label
-const existingPatterns = data.patterns || [];
-const existingLabels = new Set(existingPatterns.map(p => p.label));
-const newPatterns = patterns.filter(p => !existingLabels.has(p.label)).map(p => ({
-  label: p.label,
-  color: p.color || '#a78bfa',
-}));
+  // 4. Quotes — append with sessionId
+  const existingQuotes = data.quotes || [];
+  const newQuotes = quotes.map(q => ({
+    text: q.text,
+    sessionId: session.id,
+    attribution: q.attribution || `${data.profile?.preferredName || 'Coachee'} · ${displayDate(date)}`,
+  }));
 
-// 4. Quotes — append with sessionId
-const existingQuotes = data.quotes || [];
-const newQuotes = quotes.map(q => ({
-  text: q.text,
-  sessionId: session.id,
-  attribution: q.attribution || `${data.profile?.preferredName || 'Coachee'} · ${displayDate(date)}`,
-}));
+  // 5. Recompute stats
+  const recapped = sessions.filter(s => s.summaryMd && s.summaryMd.length > 200).length;
+  const dates = sessions.map(s => new Date(s.date + 'T00:00:00Z')).filter(d => !isNaN(d));
+  const minD = new Date(Math.min(...dates.map(d => d.getTime())));
+  const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
+  const months = (maxD.getUTCFullYear() - minD.getUTCFullYear()) * 12 + (maxD.getUTCMonth() - minD.getUTCMonth()) + 1;
+  const quarterSet = new Set(sessions.map(s => s.quarter));
+  const stats = { ...(data.stats || {}), sessions: sessions.length, recapped: `${recapped}/${sessions.length}`, months, quarters: quarterSet.size };
 
-// 5. Recompute stats
-const recapped = sessions.filter(s => s.summaryMd && s.summaryMd.length > 200).length;
-const dates = sessions.map(s => new Date(s.date + 'T00:00:00Z')).filter(d => !isNaN(d));
-const minD = new Date(Math.min(...dates.map(d => d.getTime())));
-const maxD = new Date(Math.max(...dates.map(d => d.getTime())));
-const months = (maxD.getUTCFullYear() - minD.getUTCFullYear()) * 12 + (maxD.getUTCMonth() - minD.getUTCMonth()) + 1;
-const quarterSet = new Set(sessions.map(s => s.quarter));
-const stats = { ...(data.stats || {}), sessions: sessions.length, recapped: `${recapped}/${sessions.length}`, months, quarters: quarterSet.size };
+  // 6. Update engagement counters — subtract 1 from remaining, add 1 to completed
+  const engagement = data.engagement ? { ...data.engagement } : null;
+  if (engagement && typeof engagement.remaining === 'number' && engagement.remaining > 0) {
+    engagement.remaining -= 1;
+    engagement.completed = (engagement.completed || 0) + 1;
+  }
 
-// 6. Update engagement counters — subtract 1 from remaining, add 1 to completed
-const engagement = data.engagement ? { ...data.engagement } : null;
-if (engagement && typeof engagement.remaining === 'number' && engagement.remaining > 0) {
-  engagement.remaining -= 1;
-  engagement.completed = (engagement.completed || 0) + 1;
+  // 7. Update monthChart
+  const monthChart = (data.monthChart || []).slice();
+  const newMonthLabel = displayDate(date).match(/^(\w+)/)[1] + " '" + date.slice(2, 4);
+  const monthIdx = monthChart.findIndex(m => m.label === newMonthLabel || m.label === newMonthLabel.split(' ')[0]);
+  if (monthIdx >= 0) monthChart[monthIdx] = { ...monthChart[monthIdx], count: (monthChart[monthIdx].count || 0) + 1 };
+  else monthChart.push({ label: newMonthLabel, count: 1, color: '#34d399' });
+
+  const newData = {
+    ...data,
+    sessions,
+    actionItems: [...existingActions, ...newActions],
+    patterns: [...existingPatterns, ...newPatterns],
+    quotes: [...existingQuotes, ...newQuotes],
+    stats,
+    monthChart,
+    ...(engagement ? { engagement } : {}),
+  };
+
+  return {
+    newData,
+    addedCounts: { actionItems: newActions.length, patterns: newPatterns.length, quotes: newQuotes.length },
+    totals: { sessions: sessions.length, actionItems: newData.actionItems.length, patterns: newData.patterns.length, quotes: newData.quotes.length },
+  };
 }
 
-// 7. Update monthChart
-const monthChart = (data.monthChart || []).slice();
-const newMonthLabel = displayDate(date).match(/^(\w+)/)[1] + " '" + date.slice(2, 4);
-const monthIdx = monthChart.findIndex(m => m.label === newMonthLabel || m.label === newMonthLabel.split(' ')[0]);
-if (monthIdx >= 0) monthChart[monthIdx] = { ...monthChart[monthIdx], count: (monthChart[monthIdx].count || 0) + 1 };
-else monthChart.push({ label: newMonthLabel, count: 1, color: '#34d399' });
+// Compare-and-swap with retry — fetches data + version, applies mutation, writes back conditionally.
+// On conflict (someone else wrote between our fetch and write), retries with fresh data.
+const MAX_ATTEMPTS = 5;
+let attempt = 0;
+let result = null;
+while (attempt < MAX_ATTEMPTS) {
+  attempt++;
+  const cur = await sql(`SELECT data, version FROM public.coachees WHERE folder='${folder}';`);
+  if (!cur.length) { console.error(`No coachee row for folder='${folder}'`); process.exit(1); }
+  const { data, version: currentVersion } = cur[0];
 
-const newData = {
-  ...data,
-  sessions,
-  actionItems: [...existingActions, ...newActions],
-  patterns: [...existingPatterns, ...newPatterns],
-  quotes: [...existingQuotes, ...newQuotes],
-  stats,
-  monthChart,
-  ...(engagement ? { engagement } : {}),
-};
+  const mutation = applyMutation(data);
+  const lit = JSON.stringify(mutation.newData).replace(/'/g, "''");
 
-const lit = JSON.stringify(newData).replace(/'/g, "''");
-await sql(`UPDATE public.coachees SET data='${lit}'::jsonb WHERE folder='${folder}';`);
+  // Compare-and-swap: only update if version is still what we read
+  const updateResult = await sql(`
+    UPDATE public.coachees
+    SET data='${lit}'::jsonb, version=version+1
+    WHERE folder='${folder}' AND version=${currentVersion}
+    RETURNING version;
+  `);
+
+  if (updateResult.length > 0) {
+    result = { ...mutation, attempts: attempt, newVersion: updateResult[0].version };
+    break;
+  }
+
+  if (attempt < MAX_ATTEMPTS) {
+    console.error(`Version conflict on attempt ${attempt} (expected v${currentVersion}). Retrying with fresh data...`);
+    await new Promise(r => setTimeout(r, 50 * attempt));  // small backoff
+  }
+}
+
+if (!result) {
+  console.error(`Failed after ${MAX_ATTEMPTS} attempts — too many concurrent writers. Try again.`);
+  process.exit(1);
+}
 
 console.log(JSON.stringify({
   folder,
   added: {
     session: session.id + ' — ' + session.title,
-    actionItems: newActions.length,
-    patterns: newPatterns.length,
-    quotes: newQuotes.length,
+    actionItems: result.addedCounts.actionItems,
+    patterns: result.addedCounts.patterns,
+    quotes: result.addedCounts.quotes,
   },
-  totals: {
-    sessions: sessions.length,
-    actionItems: existingActions.length + newActions.length,
-    patterns: existingPatterns.length + newPatterns.length,
-    quotes: existingQuotes.length + newQuotes.length,
-  },
+  totals: result.totals,
+  attempts: result.attempts,
+  newVersion: result.newVersion,
 }, null, 2));
