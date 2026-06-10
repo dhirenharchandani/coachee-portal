@@ -1003,10 +1003,13 @@ function EditableYearWord({ value, onSave }) {
 
 function OverviewView({ data, onNav, actionItems, updateProfileField }) {
   const lastSession = useMemo(() => [...data.sessions].reverse().find(s => s.summaryMd && !s.summaryMd.startsWith('_No recap')), [data]);
-  const top3 = data.nextQuarter.slice(0, 3);
-  const sortedScores = [...data.scorecard].sort((a, b) => b.score - a.score);
-  const topScores = sortedScores.slice(0, 3);
-  const bottomScores = sortedScores.slice(-3).reverse();
+  // Dual-company support: when data.companies is set, each company has its own engagement / evolutionArc / scorecard / nextQuarter.
+  // Otherwise fall back to the legacy top-level fields.
+  const companies = (Array.isArray(data.companies) && data.companies.length > 0)
+    ? data.companies
+    : [{ name: null, engagement: data.engagement, evolutionArc: data.evolutionArc, scorecard: data.scorecard, nextQuarter: data.nextQuarter }];
+  const multi = companies.length > 1;
+  const labelFor = (c, base) => multi && c.name ? `${c.name} — ${base}` : base;
 
   return (
     <div className="fade-in space-y-10">
@@ -1029,20 +1032,20 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
         <StatBlock value={data.stats.recapped} label="Recapped" />
       </div>
 
-      {/* Engagement card */}
-      {data.engagement && (
-        <div>
-          <SectionHeading sub={`${data.engagement.cadence} · ${data.engagement.packageLabel}`}>Engagement Rhythm</SectionHeading>
+      {/* Engagement card(s) */}
+      {companies.map((c, ci) => c.engagement && (
+        <div key={`eng-${ci}`}>
+          <SectionHeading sub={`${c.engagement.cadence} · ${c.engagement.packageLabel}`}>{labelFor(c, 'Engagement Rhythm')}</SectionHeading>
           <div className="surface rounded-2xl p-6">
-            {data.engagement.mode === 'retainer' && !data.engagement.milestones ? (
+            {c.engagement.mode === 'retainer' && !c.engagement.milestones ? (
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <p className="text-3xl font-bold text-primary">{data.profile.currentQuarter}</p>
                 <button onClick={() => onNav('/resource/agreement')} className="text-primary text-sm hover:underline">View agreement →</button>
               </div>
             ) : (() => {
-              const milestones = data.engagement.milestones;
-              const total = milestones ? milestones.length : data.engagement.contracted;
-              const done = milestones ? milestones.filter(m => m.status === 'done').length : data.engagement.completed;
+              const milestones = c.engagement.milestones;
+              const total = milestones ? milestones.length : c.engagement.contracted;
+              const done = milestones ? milestones.filter(m => m.status === 'done').length : c.engagement.completed;
               const left = total - done;
               return (
                 <>
@@ -1052,7 +1055,7 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
                         <span className="text-primary">{left}</span>
                         <span className="text-faint text-2xl"> of {total} {milestones ? 'left' : 'sessions left'}</span>
                       </p>
-                      <p className="text-faint text-xs mt-1">{done} completed in {data.engagement.packageLabel.toLowerCase()}</p>
+                      <p className="text-faint text-xs mt-1">{done} completed in {c.engagement.packageLabel.toLowerCase()}</p>
                     </div>
                     <button onClick={() => onNav('/resource/agreement')} className="text-primary text-sm hover:underline">View agreement →</button>
                   </div>
@@ -1074,10 +1077,10 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
                     </div>
                   ) : (
                     <div className="flex gap-1.5">
-                      {Array.from({ length: data.engagement.contracted }).map((_, i) => (
+                      {Array.from({ length: c.engagement.contracted }).map((_, i) => (
                         <div key={i} className="flex-1 h-2 rounded-full" style={{
-                          background: i < data.engagement.completed ? 'var(--primary)' : 'var(--surface-2)',
-                          opacity: i < data.engagement.completed ? 1 : 0.6
+                          background: i < c.engagement.completed ? 'var(--primary)' : 'var(--surface-2)',
+                          opacity: i < c.engagement.completed ? 1 : 0.6
                         }}></div>
                       ))}
                     </div>
@@ -1089,7 +1092,7 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
             })()}
           </div>
         </div>
-      )}
+      ))}
 
       {/* Last session */}
       <div>
@@ -1117,68 +1120,84 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
         )}
       </div>
 
-      {/* This Quarter Focus */}
-      <div>
-        <SectionHeading sub="Top 3 commitments this quarter.">This Quarter's Focus</SectionHeading>
-        <div className="space-y-2">
-          {top3.map(p => (
-            <div key={p.number} className="surface rounded-xl p-4 flex gap-4 items-start">
-              <span className="w-8 h-8 rounded-full flex items-center justify-center font-bold flex-shrink-0 text-white" style={{ background: 'var(--primary)' }}>{p.number}</span>
-              <div className="flex-1 min-w-0">
-                <h4 className="font-semibold">{p.title}</h4>
-                <p className="text-faint text-sm mt-0.5 line-clamp-2">{p.body}</p>
+      {/* This Quarter's Focus (per company) */}
+      {companies.map((c, ci) => {
+        const top3 = (c.nextQuarter || []).slice(0, 3);
+        if (top3.length === 0) return null;
+        return (
+          <div key={`nq-${ci}`}>
+            <SectionHeading sub="Top 3 commitments this quarter.">{labelFor(c, "This Quarter's Focus")}</SectionHeading>
+            <div className="space-y-2">
+              {top3.map(p => (
+                <div key={p.number} className="surface rounded-xl p-4 flex gap-4 items-start">
+                  <span className="w-8 h-8 rounded-full flex items-center justify-center font-bold flex-shrink-0 text-white" style={{ background: 'var(--primary)' }}>{p.number}</span>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-semibold">{p.title}</h4>
+                    <p className="text-faint text-sm mt-0.5 line-clamp-2">{p.body}</p>
+                  </div>
+                </div>
+              ))}
+              <button onClick={() => onNav('/next')} className="text-primary text-sm hover:underline mt-2">See all →</button>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Evolution Arc (per company) */}
+      {companies.map((c, ci) => (c.evolutionArc && c.evolutionArc.length > 0) && (
+        <div key={`arc-${ci}`}>
+          <SectionHeading sub="The shape of the journey, quarter by quarter.">{labelFor(c, 'Evolution Arc')}</SectionHeading>
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+            {c.evolutionArc.map(arc => (
+              <div key={arc.id} className="surface rounded-xl p-4" style={{ borderTop: `2px solid ${arc.color}` }}>
+                <p className="text-xs font-semibold mb-1" style={{ color: arc.color }}>{arc.label}</p>
+                <p className="font-bold text-sm mb-2">{arc.title}</p>
+                <p className="text-faint text-xs leading-relaxed">{arc.summary}</p>
+                <p className="text-faint text-[11px] mt-2">{arc.sessionCount} session{arc.sessionCount !== 1 ? 's' : ''}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {/* Scorecard Pulse (per company) */}
+      {companies.map((c, ci) => {
+        const sc = c.scorecard || [];
+        if (sc.length === 0) return null;
+        const sorted = [...sc].sort((a, b) => b.score - a.score);
+        const topS = sorted.slice(0, 3);
+        const botS = sorted.slice(-3).reverse();
+        return (
+          <div key={`sc-${ci}`}>
+            <SectionHeading sub="Three strongest, three still developing.">{labelFor(c, 'Scorecard Pulse')}</SectionHeading>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="surface rounded-xl p-5">
+                <p className="text-xs tracking-widest text-faint mb-3">STRONGEST</p>
+                <div className="space-y-2">
+                  {topS.map(s => (
+                    <div key={s.dimension} className="flex justify-between text-sm">
+                      <span>{s.dimension}</span>
+                      <span className="text-primary font-semibold">{s.score}/{s.max}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="surface rounded-xl p-5">
+                <p className="text-xs tracking-widest text-faint mb-3">STILL DEVELOPING</p>
+                <div className="space-y-2">
+                  {botS.map(s => (
+                    <div key={s.dimension} className="flex justify-between text-sm">
+                      <span>{s.dimension}</span>
+                      <span className="text-secondary font-semibold">{s.score}/{s.max}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
-          ))}
-          <button onClick={() => onNav('/next')} className="text-primary text-sm hover:underline mt-2">See all 5 →</button>
-        </div>
-      </div>
-
-      {/* Evolution Arc */}
-      <div>
-        <SectionHeading sub="The shape of the journey, quarter by quarter.">Evolution Arc</SectionHeading>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-          {data.evolutionArc.map(arc => (
-            <div key={arc.id} className="surface rounded-xl p-4" style={{ borderTop: `2px solid ${arc.color}` }}>
-              <p className="text-xs font-semibold mb-1" style={{ color: arc.color }}>{arc.label}</p>
-              <p className="font-bold text-sm mb-2">{arc.title}</p>
-              <p className="text-faint text-xs leading-relaxed">{arc.summary}</p>
-              <p className="text-faint text-[11px] mt-2">{arc.sessionCount} session{arc.sessionCount !== 1 ? 's' : ''}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Scorecard pulse */}
-      <div>
-        <SectionHeading sub="Three strongest, three still developing.">Scorecard Pulse</SectionHeading>
-      {/* note retained for context */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="surface rounded-xl p-5">
-            <p className="text-xs tracking-widest text-faint mb-3">STRONGEST</p>
-            <div className="space-y-2">
-              {topScores.map(s => (
-                <div key={s.dimension} className="flex justify-between text-sm">
-                  <span>{s.dimension}</span>
-                  <span className="text-primary font-semibold">{s.score}/{s.max}</span>
-                </div>
-              ))}
-            </div>
+            <button onClick={() => onNav('/scorecard')} className="text-primary text-sm hover:underline mt-3">See full scorecard →</button>
           </div>
-          <div className="surface rounded-xl p-5">
-            <p className="text-xs tracking-widest text-faint mb-3">STILL DEVELOPING</p>
-            <div className="space-y-2">
-              {bottomScores.map(s => (
-                <div key={s.dimension} className="flex justify-between text-sm">
-                  <span>{s.dimension}</span>
-                  <span className="text-secondary font-semibold">{s.score}/{s.max}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-        <button onClick={() => onNav('/scorecard')} className="text-primary text-sm hover:underline mt-3">See full scorecard →</button>
-      </div>
+        );
+      })}
 
       {/* Quick links */}
       <div>
