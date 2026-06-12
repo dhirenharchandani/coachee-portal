@@ -308,6 +308,18 @@ function useActionStatus(data, updateData) {
   );
   const cycleStatus = (id) => {
     if (!data) return;
+    // Guard: a missing id would match every other item whose id is also missing
+    // (or duplicate items would all cycle together). Refuse and log instead of
+    // silently mutating a row the user didn't click.
+    if (id === null || id === undefined || id === '') {
+      console.warn('cycleStatus: ignored click on action item with no id');
+      return;
+    }
+    const matches = (data.actionItems || []).filter(it => it.id === id).length;
+    if (matches !== 1) {
+      console.warn(`cycleStatus: ${matches} items match id "${id}", aborting to avoid cross-toggle`);
+      return;
+    }
     const newActions = (data.actionItems || []).map(it => {
       if (it.id !== id) return it;
       const cur = normalizeStatus(it.status);
@@ -1326,7 +1338,7 @@ function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, m
         <div className="mb-8">
           <SectionHeading sub="Tap a checkbox to cycle: pending → in motion → done.">Action Items from this session</SectionHeading>
           <div className="space-y-2">
-            {sessionActions.map(a => <ActionRow key={a.id} item={a} onCycle={() => cycleStatus(a.id)} />)}
+            {sessionActions.map((a, i) => <ActionRow key={a.id || `nokey-${i}`} item={a} onCycle={() => cycleStatus(a.id)} />)}
           </div>
         </div>
       )}
@@ -1421,7 +1433,7 @@ function ActionItemsView({ data, actionItems, cycleStatus }) {
         <EmptyState icon="check" title="Nothing here yet." body="Action items pulled from every session recap will appear here as commitments are made." />
       ) : (
         <div className="space-y-2">
-          {filtered.map(a => <ActionRow key={a.id} item={a} onCycle={() => cycleStatus(a.id)} />)}
+          {filtered.map((a, i) => <ActionRow key={a.id || `nokey-${i}`} item={a} onCycle={() => cycleStatus(a.id)} />)}
         </div>
       )}
     </div>
