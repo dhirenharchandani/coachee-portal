@@ -178,7 +178,18 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 const SUPABASE_URL = "https://diiazuiyxxcecjnjmirt.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_xEPPs63vVVCELKyb0WrDtQ_qAAnvErH";
 const USE_REAL_AUTH = !!(SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase);
-const sb = USE_REAL_AUTH ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+const sb = USE_REAL_AUTH ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    // Implicit flow puts the access token in the URL fragment instead of
+    // using a PKCE code-verifier. This means the magic link can be clicked
+    // from ANY browser/device — not just the one that requested it — which
+    // fixes the "Outlook hands the link to Edge while I'm on Chrome" loop.
+    flowType: 'implicit',
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  }
+}) : null;
 
 // Localhost-only mock mode — load data/_preview/<folder>.json without auth.
 // Only active on localhost; production ignores the ?mock query param.
@@ -410,6 +421,22 @@ function useAuth() {
     return { ok: true };
   };
 
+  // Fallback path: user pastes the 6-digit code from the email instead of
+  // clicking the magic link. Defeats Outlook Safe Links (which pre-fetches
+  // links and consumes the one-time token) and any email-gateway URL mangling.
+  const verifyEmailOtp = async (email, token) => {
+    if (!sb) {
+      // Setup-mode fallback — accept any 6-digit code
+      sessionStorage.setItem('ig-authed-email', email);
+      setSession({ user: { email } });
+      return { ok: true };
+    }
+    const cleaned = String(token || '').replace(/\s+/g, '').trim();
+    const { error } = await sb.auth.verifyOtp({ email, token: cleaned, type: 'email' });
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  };
+
   const signInWithProvider = async (provider) => {
     if (!sb) return { ok: false, error: 'Supabase not configured.' };
     const redirectTo = window.location.origin + window.location.pathname;
@@ -427,7 +454,7 @@ function useAuth() {
     window.location.hash = '/overview';
   };
 
-  return { session, loading, sendMagicLink, signInWithProvider, signOut, authedEmail: session?.user?.email || null };
+  return { session, loading, sendMagicLink, verifyEmailOtp, signInWithProvider, signOut, authedEmail: session?.user?.email || null };
 }
 
 /* =====================================================================
@@ -681,10 +708,12 @@ function EmptyState({ icon, title, body }) {
 /* =====================================================================
    LOGIN SCREEN
    ===================================================================== */
-function LoginScreen({ sendMagicLink, signInWithProvider }) {
+function LoginScreen({ sendMagicLink, verifyEmailOtp, signInWithProvider }) {
   const [email, setEmail] = useState('');
-  const [status, setStatus] = useState('idle'); // idle | sending | sent | error
+  const [status, setStatus] = useState('idle'); // idle | sending | sent | error | verifying
   const [err, setErr] = useState('');
+  const [otp, setOtp] = useState('');
+  const [otpErr, setOtpErr] = useState('');
 
   const submit = async (e) => {
     e.preventDefault();
@@ -697,6 +726,18 @@ function LoginScreen({ sendMagicLink, signInWithProvider }) {
       setErr(result.error || 'Something went wrong.');
       setStatus('error');
     }
+  };
+
+  const submitOtp = async (e) => {
+    e.preventDefault();
+    setOtpErr('');
+    setStatus('verifying');
+    const result = await verifyEmailOtp?.(email, otp);
+    if (!result || result.ok === false) {
+      setOtpErr(result?.error || 'Code did not match. Check the email and try again.');
+      setStatus('sent');
+    }
+    // On success, onAuthStateChange in useAuth flips session → App re-renders.
   };
 
   const oauth = async (provider) => {
@@ -728,12 +769,45 @@ function LoginScreen({ sendMagicLink, signInWithProvider }) {
           </div>
         )}
 
-        {status === 'sent' ? (
-          <div className="text-center py-6">
-            <div className="mb-3 text-primary flex justify-center"><Icon name="envelope" size={36} strokeWidth={1.25} /></div>
-            <h2 className="font-semibold text-lg mb-2">Check your email.</h2>
-            <p className="text-dim text-sm reading">We sent a sign-in link to <strong>{email}</strong>. Click it from this device to land back here, signed in.</p>
-            <button onClick={() => { setStatus('idle'); setEmail(''); }} className="text-primary text-sm mt-6 hover:underline">Use a different email</button>
+        {(status === 'sent' || status === 'verifying') ? (
+          <div className="py-2">
+            <div className="text-center mb-5">
+              <div className="mb-3 text-primary flex justify-center"><Icon name="envelope" size={36} strokeWidth={1.25} /></div>
+              <h2 className="font-semibold text-lg mb-2">Check your email.</h2>
+              <p className="text-dim text-sm reading">We sent a sign-in link and a 6-digit code to <strong>{email}</strong>.</p>
+            </div>
+
+            <div className="surface-2 rounded-lg p-4 mb-4 text-sm reading text-dim">
+              <p className="mb-2"><strong className="text-primary">Easiest:</strong> click the link in the email from this same browser. You'll land back here, signed in.</p>
+              <p className="mb-0"><strong className="text-secondary">If the link doesn't work</strong> (Outlook in a different browser, Safe Links pre-clicking), paste the 6-digit code from the email below.</p>
+            </div>
+
+            <form onSubmit={submitOtp}>
+              <label className="block text-xs text-dim mb-2 tracking-wide">6-DIGIT CODE FROM EMAIL</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="one-time-code"
+                maxLength="6"
+                className="input mb-4"
+                value={otp}
+                onChange={e => setOtp(e.target.value.replace(/\D/g, ''))}
+                placeholder="123456"
+                disabled={status === 'verifying'}
+                style={{ letterSpacing: '0.4em', fontFamily: 'ui-monospace, monospace', textAlign: 'center', fontSize: '18px' }}
+              />
+              {otpErr && <p className="text-sm mb-3" style={{ color: '#f87171' }}>{otpErr}</p>}
+              <button
+                type="submit"
+                disabled={status === 'verifying' || otp.length !== 6}
+                className="btn-primary w-full py-3 rounded-lg font-semibold disabled:opacity-60"
+              >
+                {status === 'verifying' ? 'Verifying…' : 'Sign in with code'}
+              </button>
+            </form>
+
+            <button onClick={() => { setStatus('idle'); setEmail(''); setOtp(''); setOtpErr(''); }} className="text-primary text-sm mt-5 hover:underline w-full text-center">Use a different email</button>
           </div>
         ) : (
           <>
@@ -784,7 +858,7 @@ function LoginScreen({ sendMagicLink, signInWithProvider }) {
           </>
         )}
 
-        <p className="text-faint text-xs text-center mt-6">No password. Just a link in your inbox.</p>
+        <p className="text-faint text-xs text-center mt-6">No password. Just a link — or a 6-digit code — in your inbox.</p>
       </div>
       <p className="text-faint text-xs text-center mt-6">
         Developed by InnerGame Consulting
@@ -2208,7 +2282,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, act
    ROOT APP
    ===================================================================== */
 function App() {
-  const { session, loading, sendMagicLink, signInWithProvider, signOut, authedEmail } = useAuth();
+  const { session, loading, sendMagicLink, verifyEmailOtp, signInWithProvider, signOut, authedEmail } = useAuth();
   const { data, error, updateProfileField, updateData, coachees, activeFolder, setActiveFolder } = useCoacheeData(authedEmail);
 
   if (loading) return (
@@ -2217,7 +2291,7 @@ function App() {
     </div>
   );
 
-  if (!session) return <LoginScreen sendMagicLink={sendMagicLink} signInWithProvider={signInWithProvider} />;
+  if (!session) return <LoginScreen sendMagicLink={sendMagicLink} verifyEmailOtp={verifyEmailOtp} signInWithProvider={signInWithProvider} />;
 
   if (error === 'NO_DASHBOARD') return (
     <div className="login-bg min-h-screen flex flex-col items-center justify-center p-6">
