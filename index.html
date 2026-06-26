@@ -1891,7 +1891,15 @@ function ResourceDetailView({ data, resourceId, onNav }) {
 
       {signedUrl && (item.storagePath || item.pdfFile) && (
         <div className="surface rounded-2xl mb-6 overflow-hidden" style={{ height: '70vh' }}>
-          <iframe src={signedUrl} title={item.title} style={{ width: '100%', height: '100%', border: 'none' }}></iframe>
+          {/* <object> with explicit type forces inline rendering for PDFs even when */}
+          {/* Supabase Storage doesn't set Content-Type: application/pdf. Fallback to */}
+          {/* a download link for browsers that can't render PDFs inline (rare). */}
+          <object data={signedUrl} type="application/pdf" style={{ width: '100%', height: '100%', border: 'none' }}>
+            <div style={{ padding: '24px', textAlign: 'center' }}>
+              <p className="text-faint text-sm mb-3">Your browser can't display this PDF inline.</p>
+              <a href={signedUrl} target="_blank" rel="noopener" className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Open in new tab ↗</a>
+            </div>
+          </object>
         </div>
       )}
 
