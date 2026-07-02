@@ -1322,8 +1322,11 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
 /* =====================================================================
    VIEW: SESSIONS LIST + DETAIL
    ===================================================================== */
+const COACH_EMAILS = ['dhirenharchandani@gmail.com', 'dhiren@myinnergame.com'];
+const isCoachEmail = (email) => COACH_EMAILS.includes((email || '').toLowerCase().trim());
+
 function SessionsView({ data, onNav, route, unviewedIds = [], authedEmail }) {
-  const isCoach = authedEmail === 'dhirenharchandani@gmail.com';
+  const isCoach = isCoachEmail(authedEmail);
   const unviewedSet = useMemo(() => new Set(unviewedIds), [unviewedIds]);
   const [q, setQ] = useState('');
   const [quarterFilter, setQuarterFilter] = useState('all');
@@ -1375,8 +1378,6 @@ function SessionsView({ data, onNav, route, unviewedIds = [], authedEmail }) {
     </div>
   );
 }
-
-const COACH_EMAIL = 'dhirenharchandani@gmail.com';
 
 function TranscriptPanel({ folder, sessionId }) {
   const [expanded, setExpanded] = useState(false);
@@ -1464,9 +1465,16 @@ function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, m
         <Markdown source={session.summaryMd} />
       </div>
 
-      {authedEmail === COACH_EMAIL && (
+      {isCoachEmail(authedEmail) ? (
         <TranscriptPanel folder={activeFolder} sessionId={session.id} />
-      )}
+      ) : window.location.search.includes('debug=1') ? (
+        <div className="rounded-xl p-4 mb-8 text-xs" style={{ background: 'var(--surface-2)', border: '1px dashed var(--border)', color: 'var(--dim)' }}>
+          <div><strong>Transcript panel hidden</strong> — email doesn't match coach allowlist.</div>
+          <div className="mt-1 text-faint">authedEmail: <code>{JSON.stringify(authedEmail)}</code></div>
+          <div className="text-faint">activeFolder: <code>{JSON.stringify(activeFolder)}</code></div>
+          <div className="text-faint">allowlist: <code>{JSON.stringify(COACH_EMAILS)}</code></div>
+        </div>
+      ) : null}
 
       {sessionActions.length > 0 && (
         <div className="mb-8">
