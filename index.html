@@ -1322,7 +1322,8 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
 /* =====================================================================
    VIEW: SESSIONS LIST + DETAIL
    ===================================================================== */
-function SessionsView({ data, onNav, route, unviewedIds = [] }) {
+function SessionsView({ data, onNav, route, unviewedIds = [], authedEmail }) {
+  const isCoach = authedEmail === 'dhirenharchandani@gmail.com';
   const unviewedSet = useMemo(() => new Set(unviewedIds), [unviewedIds]);
   const [q, setQ] = useState('');
   const [quarterFilter, setQuarterFilter] = useState('all');
@@ -1359,9 +1360,10 @@ function SessionsView({ data, onNav, route, unviewedIds = [] }) {
           <div key={s.id} onClick={() => onNav('/session/' + s.id)} className="surface rounded-xl p-4 cursor-pointer hover:opacity-90 flex items-start gap-4">
             <div className="text-primary font-medium w-20 text-sm flex-shrink-0">{s.displayDate.replace(', 2025', '').replace(', 2026', '')}</div>
             <div className="flex-1 min-w-0">
-              <div className="font-semibold flex items-center gap-2">
+              <div className="font-semibold flex items-center gap-2 flex-wrap">
                 {s.title}
                 {unviewedSet.has(s.id) && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: 'var(--secondary)', color: 'white' }}>NEW</span>}
+                {isCoach && s.hasTranscript && <span className="text-[10px] font-semibold tracking-wider px-2 py-0.5 rounded-full" style={{ background: 'var(--surface-2)', color: 'var(--dim)', border: '1px solid var(--border)' }}>TRANSCRIPT</span>}
               </div>
               <div className="text-xs text-faint mt-0.5 flex items-center gap-1.5">{s.theme}{s.durationMin ? ` · ${s.durationMin} min` : ''}{s.recordingUrl && <span className="inline-flex items-center gap-1"> · <Icon name="play" size={12} /> recording</span>}</div>
               {s.keyTakeaway && <p className="text-sm text-dim mt-2 italic">{s.keyTakeaway}</p>}
@@ -2312,7 +2314,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, act
     const parts = route.split('/').filter(Boolean);
     const seg = parts[0] || 'overview';
     if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} />;
-    if (seg === 'sessions') return <SessionsView data={data} onNav={go} route={route} unviewedIds={unviewedIds} />;
+    if (seg === 'sessions') return <SessionsView data={data} onNav={go} route={route} unviewedIds={unviewedIds} authedEmail={authedEmail} />;
     if (seg === 'session' && parts[1]) return <SessionDetailView data={data} sessionId={parts[1]} onNav={go} actionItems={actionItems} cycleStatus={cycleStatus} markViewed={markViewed} authedEmail={authedEmail} activeFolder={activeFolder} />;
     if (seg === 'actions') return <ActionItemsView data={data} actionItems={actionItems} cycleStatus={cycleStatus} />;
     if (seg === 'growth') return <GrowthView data={data} />;
