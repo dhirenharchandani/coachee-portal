@@ -1374,7 +1374,61 @@ function SessionsView({ data, onNav, route, unviewedIds = [] }) {
   );
 }
 
-function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, markViewed }) {
+const COACH_EMAIL = 'dhirenharchandani@gmail.com';
+
+function TranscriptPanel({ folder, sessionId }) {
+  const [expanded, setExpanded] = useState(false);
+  const [row, setRow] = useState(null);
+  const [status, setStatus] = useState('idle');
+  const [errMsg, setErrMsg] = useState(null);
+
+  useEffect(() => {
+    if (!expanded || row || status === 'loading' || !sb || !folder) return;
+    setStatus('loading');
+    sb.from('session_transcripts')
+      .select('transcript_md, source, word_count, updated_at')
+      .eq('folder', folder)
+      .eq('session_id', sessionId)
+      .maybeSingle()
+      .then(({ data: r, error }) => {
+        if (error) { setErrMsg(error.message); setStatus('error'); return; }
+        if (!r) { setStatus('empty'); return; }
+        setRow(r); setStatus('ready');
+      });
+  }, [expanded, folder, sessionId, row, status]);
+
+  const meta = row ? `${(row.word_count || 0).toLocaleString()} words · ${row.source} · updated ${new Date(row.updated_at).toLocaleDateString()}` : 'Click to load';
+
+  return (
+    <div className="rounded-2xl p-5 md:p-6 mb-8" style={{ background: 'var(--surface-2)', border: '1px dashed var(--border)' }}>
+      <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center justify-between text-left gap-4">
+        <div className="min-w-0">
+          <p className="text-xs tracking-[0.2em] text-faint mb-1">TRANSCRIPT · COACH-ONLY</p>
+          <p className="text-sm text-dim truncate">{meta}</p>
+        </div>
+        <span className="text-faint text-lg shrink-0">{expanded ? '−' : '+'}</span>
+      </button>
+      {expanded && (
+        <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--border)' }}>
+          {status === 'loading' && <p className="text-faint text-sm">Loading transcript…</p>}
+          {status === 'error' && <p className="text-secondary text-sm">Couldn't load: {errMsg}</p>}
+          {status === 'empty' && (
+            <p className="text-faint text-sm reading">
+              No transcript saved for this session. Run <code style={{ background: 'var(--surface)', padding: '1px 6px', borderRadius: '4px' }}>save-transcript {folder} {sessionId} &lt;file&gt;</code> to add one.
+            </p>
+          )}
+          {status === 'ready' && row && (
+            <div className="reading" style={{ maxHeight: '65vh', overflowY: 'auto', fontSize: '14px', lineHeight: '1.55' }}>
+              <Markdown source={row.transcript_md} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, markViewed, authedEmail, activeFolder }) {
   const session = data.sessions.find(s => s.id === sessionId);
   useEffect(() => { if (session && markViewed) markViewed(session.id); }, [session, markViewed]);
   if (!session) return <EmptyState icon="question" title="Session not found." body="The session you're looking for doesn't exist or hasn't been loaded yet." />;
@@ -1407,6 +1461,10 @@ function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, m
       <div className="surface rounded-2xl p-6 md:p-10 mb-8">
         <Markdown source={session.summaryMd} />
       </div>
+
+      {authedEmail === COACH_EMAIL && (
+        <TranscriptPanel folder={activeFolder} sessionId={session.id} />
+      )}
 
       {sessionActions.length > 0 && (
         <div className="mb-8">
@@ -2217,7 +2275,7 @@ function MessagesView({ data }) {
 /* =====================================================================
    APP SHELL
    ===================================================================== */
-function AppShell({ data, signOut, updateProfileField, updateData, coachees, activeFolder, setActiveFolder }) {
+function AppShell({ data, signOut, updateProfileField, updateData, coachees, activeFolder, setActiveFolder, authedEmail }) {
   const [route, go] = useHashRoute();
   const [theme, toggleTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -2255,7 +2313,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, act
     const seg = parts[0] || 'overview';
     if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} />;
     if (seg === 'sessions') return <SessionsView data={data} onNav={go} route={route} unviewedIds={unviewedIds} />;
-    if (seg === 'session' && parts[1]) return <SessionDetailView data={data} sessionId={parts[1]} onNav={go} actionItems={actionItems} cycleStatus={cycleStatus} markViewed={markViewed} />;
+    if (seg === 'session' && parts[1]) return <SessionDetailView data={data} sessionId={parts[1]} onNav={go} actionItems={actionItems} cycleStatus={cycleStatus} markViewed={markViewed} authedEmail={authedEmail} activeFolder={activeFolder} />;
     if (seg === 'actions') return <ActionItemsView data={data} actionItems={actionItems} cycleStatus={cycleStatus} />;
     if (seg === 'growth') return <GrowthView data={data} />;
     if (seg === 'scorecard') return <ScorecardView data={data} />;
@@ -2333,7 +2391,7 @@ function App() {
     </div>
   );
 
-  return <AppShell data={data} signOut={signOut} updateProfileField={updateProfileField} updateData={updateData} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />;
+  return <AppShell data={data} signOut={signOut} updateProfileField={updateProfileField} updateData={updateData} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} authedEmail={authedEmail} />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);

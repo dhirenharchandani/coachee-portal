@@ -10,13 +10,32 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 const PROJECT_REF = 'diiazuiyxxcecjnjmirt';
-const PAT = process.env.SUPABASE_ACCESS_TOKEN;
+
+// Token: env var first, then ~/.claude/settings.json so launchd can run this
+// without needing the PAT embedded in a plist. Same pattern as snapshot-coachees.
+function readToken() {
+  if (process.env.SUPABASE_ACCESS_TOKEN) return process.env.SUPABASE_ACCESS_TOKEN;
+  try {
+    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+    if (fs.existsSync(settingsPath)) {
+      const s = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      const t = s?.env?.SUPABASE_ACCESS_TOKEN;
+      if (t) return t;
+    }
+  } catch (e) {
+    console.warn(`warn: couldn't parse ~/.claude/settings.json: ${e.message}`);
+  }
+  return null;
+}
+
+const PAT = readToken();
 const BACKUP_DIR = '/Users/dhiren/Library/CloudStorage/GoogleDrive-dhirenharchandani@gmail.com/My Drive/Coachee-Portal-Backups';
 const RETENTION_DAYS = 30;
 
-if (!PAT) { console.error('SUPABASE_ACCESS_TOKEN required (set in ~/.claude/settings.json)'); process.exit(1); }
+if (!PAT) { console.error('SUPABASE_ACCESS_TOKEN required (set in env or ~/.claude/settings.json)'); process.exit(1); }
 
 async function sql(query) {
   const r = await fetch(`https://api.supabase.com/v1/projects/${PROJECT_REF}/database/query`, {
@@ -43,6 +62,10 @@ async function storageList(prefix) {
 const rows = await sql(`SELECT folder, email, email_aliases, version, data FROM public.coachees ORDER BY folder;`);
 console.log(`Fetched ${rows.length} coachee rows`);
 
+// 1b. Fetch every session transcript (coach-only content; PAT bypasses RLS)
+const transcripts = await sql(`SELECT folder, session_id, source, transcript_md, word_count, created_at, updated_at FROM public.session_transcripts ORDER BY folder, session_id;`);
+console.log(`Fetched ${transcripts.length} session transcripts`);
+
 // 2. Build a storage manifest per folder (filenames + sizes, not file contents)
 const storageManifest = {};
 for (const row of rows) {
@@ -68,6 +91,8 @@ const backup = {
   coacheeCount: rows.length,
   coachees: rows,
   storageManifest,
+  transcriptCount: transcripts.length,
+  sessionTranscripts: transcripts,
 };
 const json = JSON.stringify(backup, null, 2);
 const datedPath = path.join(BACKUP_DIR, `coachees-${today}.json`);
