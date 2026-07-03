@@ -779,28 +779,28 @@ function LoginScreen({ sendMagicLink, verifyEmailOtp, signInWithProvider }) {
 
             <div className="surface-2 rounded-lg p-4 mb-4 text-sm reading text-dim">
               <p className="mb-2"><strong className="text-primary">Easiest:</strong> click the link in the email from this same browser. You'll land back here, signed in.</p>
-              <p className="mb-0"><strong className="text-secondary">If the link doesn't work</strong> (Outlook in a different browser, Safe Links pre-clicking), paste the 6-digit code from the email below.</p>
+              <p className="mb-0"><strong className="text-secondary">If the link doesn't work</strong> (Outlook in a different browser, Safe Links pre-clicking), paste the code from the email below.</p>
             </div>
 
             <form onSubmit={submitOtp}>
-              <label className="block text-xs text-dim mb-2 tracking-wide">6-DIGIT CODE FROM EMAIL</label>
+              <label className="block text-xs text-dim mb-2 tracking-wide">CODE FROM EMAIL</label>
               <input
                 type="text"
                 inputMode="numeric"
                 pattern="[0-9]*"
                 autoComplete="one-time-code"
-                maxLength="6"
+                maxLength="10"
                 className="input mb-4"
                 value={otp}
                 onChange={e => setOtp(e.target.value.replace(/\D/g, ''))}
-                placeholder="123456"
+                placeholder="6- or 8-digit code"
                 disabled={status === 'verifying'}
                 style={{ letterSpacing: '0.4em', fontFamily: 'ui-monospace, monospace', textAlign: 'center', fontSize: '18px' }}
               />
               {otpErr && <p className="text-sm mb-3" style={{ color: '#f87171' }}>{otpErr}</p>}
               <button
                 type="submit"
-                disabled={status === 'verifying' || otp.length !== 6}
+                disabled={status === 'verifying' || otp.length < 6}
                 className="btn-primary w-full py-3 rounded-lg font-semibold disabled:opacity-60"
               >
                 {status === 'verifying' ? 'Verifying…' : 'Sign in with code'}
