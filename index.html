@@ -432,9 +432,17 @@ function useAuth() {
       return { ok: true };
     }
     const cleaned = String(token || '').replace(/\s+/g, '').trim();
-    const { error } = await sb.auth.verifyOtp({ email, token: cleaned, type: 'email' });
-    if (error) return { ok: false, error: error.message };
-    return { ok: true };
+    // Supabase issues OTPs of different "types" depending on how they were
+    // generated. signInWithOtp emails are type='email'; admin-generated
+    // recovery/magiclink codes need their own type. Try each in order.
+    const types = ['email', 'magiclink', 'recovery'];
+    let lastError = null;
+    for (const type of types) {
+      const { error } = await sb.auth.verifyOtp({ email, token: cleaned, type });
+      if (!error) return { ok: true };
+      lastError = error;
+    }
+    return { ok: false, error: lastError?.message || 'Code did not match.' };
   };
 
   const signInWithProvider = async (provider) => {
