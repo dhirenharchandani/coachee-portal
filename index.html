@@ -773,13 +773,8 @@ function LoginScreen({ sendMagicLink, verifyEmailOtp, signInWithProvider }) {
           <div className="py-2">
             <div className="text-center mb-5">
               <div className="mb-3 text-primary flex justify-center"><Icon name="envelope" size={36} strokeWidth={1.25} /></div>
-              <h2 className="font-semibold text-lg mb-2">Check your email.</h2>
-              <p className="text-dim text-sm reading">We sent a sign-in link and a 6-digit code to <strong>{email}</strong>.</p>
-            </div>
-
-            <div className="surface-2 rounded-lg p-4 mb-4 text-sm reading text-dim">
-              <p className="mb-2"><strong className="text-primary">Easiest:</strong> click the link in the email from this same browser. You'll land back here, signed in.</p>
-              <p className="mb-0"><strong className="text-secondary">If the link doesn't work</strong> (Outlook in a different browser, Safe Links pre-clicking), paste the code from the email below.</p>
+              <h2 className="font-semibold text-lg mb-2">Enter your code.</h2>
+              <p className="text-dim text-sm reading">We emailed a sign-in code to <strong>{email}</strong>. Paste it below — <strong className="text-secondary">you don't need to click any link.</strong></p>
             </div>
 
             <form onSubmit={submitOtp}>
@@ -795,6 +790,7 @@ function LoginScreen({ sendMagicLink, verifyEmailOtp, signInWithProvider }) {
                 onChange={e => setOtp(e.target.value.replace(/\D/g, ''))}
                 placeholder="6- or 8-digit code"
                 disabled={status === 'verifying'}
+                autoFocus
                 style={{ letterSpacing: '0.4em', fontFamily: 'ui-monospace, monospace', textAlign: 'center', fontSize: '18px' }}
               />
               {otpErr && <p className="text-sm mb-3" style={{ color: '#f87171' }}>{otpErr}</p>}
@@ -806,6 +802,10 @@ function LoginScreen({ sendMagicLink, verifyEmailOtp, signInWithProvider }) {
                 {status === 'verifying' ? 'Verifying…' : 'Sign in with code'}
               </button>
             </form>
+
+            <div className="mt-5 text-center text-xs text-faint reading">
+              The email also contains a magic link, but if you're on Outlook / Microsoft 365, Safe Links may consume it before you click. <strong>The code always works.</strong>
+            </div>
 
             <button onClick={() => { setStatus('idle'); setEmail(''); setOtp(''); setOtpErr(''); }} className="text-primary text-sm mt-5 hover:underline w-full text-center">Use a different email</button>
           </div>
