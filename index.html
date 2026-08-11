@@ -901,6 +901,11 @@ const NAV = [
 
 function buildNav(data) {
   const nav = [...NAV];
+  if (data?.clientNotes?.length) {
+    nav.push({ section: 'FROM YOU', items: [
+      { id: 'notes', icon: 'envelope', label: 'Your Notes', route: '/notes' },
+    ]});
+  }
   if (data?.financials?.enabled) {
     nav.push({ section: 'FINANCE', items: [
       { id: 'financials', icon: 'chart', label: data.financials.title || 'Financials', route: '/financials' },
@@ -2275,6 +2280,33 @@ function JournalView({ data, updateData, onNav }) {
 /* =====================================================================
    VIEW: MESSAGES (stub)
    ===================================================================== */
+function NotesView({ data }) {
+  const notes = (data?.clientNotes || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const sourceLabel = (s) => ({ email: 'Email', whatsapp: 'WhatsApp', 'in-person': 'In person', text: 'Text' })[s] || s || 'Note';
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">FROM YOU</p>
+      <h1 className="text-3xl font-bold mb-2">Your Notes</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>Notes you've sent Dhiren, saved here so they don't get lost between sessions.</p>
+      {notes.length === 0 ? (
+        <EmptyState icon="envelope" title="Nothing here yet." body="Notes you send Dhiren will land here." />
+      ) : (
+        <div className="space-y-4">
+          {notes.map((n, i) => (
+            <div key={n.id || i} className="surface rounded-xl p-6 border border-default">
+              <div className="flex items-center gap-3 mb-3">
+                <span className="text-xs font-semibold" style={{ color: 'var(--primary)' }}>{n.date || ''}</span>
+                {n.source && <span className="text-[10px] tracking-[0.15em] uppercase text-faint">{sourceLabel(n.source)}</span>}
+              </div>
+              <p className="reading whitespace-pre-wrap" style={{ fontSize: '15px', lineHeight: 1.7 }}>{n.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MessagesView({ data }) {
   return (
     <div className="fade-in">
@@ -2340,6 +2372,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, act
     if (seg === 'resource' && parts[1]) return <ResourceDetailView data={data} resourceId={parts[1]} onNav={go} />;
     if (seg === 'journal') return <JournalView data={data} updateData={updateData} onNav={go} />;
     if (seg === 'messages') return <MessagesView data={data} />;
+    if (seg === 'notes') return <NotesView data={data} />;
     if (seg === 'financials') return <FinancialsView data={data} />;
     return <OverviewView data={data} onNav={go} />;
   }, [route, data, actionItems, priorities]);
