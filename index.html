@@ -2375,6 +2375,19 @@ function periodsFor(cadence, count, offset = 0) {
   for (let i = count - 1; i >= 0; i--) out.push(shiftPeriod(cadence, now, -i));
   return out;
 }
+
+// Columns are ANCHORED to a start date you set, not derived backwards from today.
+// Runs from the bucket containing startISO up to the current bucket, plus `future`
+// buckets ahead so the next column is visible before it begins. New columns appear
+// on their own as periods elapse — nothing to add by hand.
+function periodsFromAnchor(cadence, startISO, future = 1) {
+  const first = periodStart(cadence, new Date(startISO + 'T00:00:00Z'));
+  const last = shiftPeriod(cadence, periodStart(cadence, new Date()), future);
+  const out = [];
+  let p = first, guard = 0;
+  while (p <= last && guard++ < 4000) { out.push(p); p = shiftPeriod(cadence, p, 1); }
+  return out.length ? out : [first];
+}
 function meetsGoal(v, op, goal) {
   if (v === null || v === undefined || goal === null || goal === undefined) return null;
   const a = Number(v), b = Number(goal);
@@ -2532,7 +2545,7 @@ function KpiCell({ kpi, period, value, onSave }) {
 
 function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove }) {
   const [editing, setEditing] = useState(false);
-  const [f, setF] = useState({ name: kpi.name, goal_op: kpi.goal_op, goal_value: kpi.goal_value ?? '', unit: kpi.unit || '', owner_name: kpi.owner_name || '', category: kpi.category || '', agg: kpi.agg || 'avg' });
+  const [f, setF] = useState({ name: kpi.name, goal_op: kpi.goal_op, goal_value: kpi.goal_value ?? '', unit: kpi.unit || '', owner_name: kpi.owner_name || '', category: kpi.category || '', agg: kpi.agg || 'avg', start_date: kpi.start_date || '' });
 
   const { latest, agg, trend, hits, scored } = summarise(kpi, values, periods);
 
@@ -2546,6 +2559,7 @@ function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove 
       owner_name: f.owner_name.trim() || null,
       category: f.category.trim() || null,
       agg: f.agg,
+      start_date: f.start_date || null,
     });
   };
 
@@ -2565,6 +2579,8 @@ function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove 
             title="How the header figure is summarised across periods">
             <option value="sum">total</option><option value="avg">average</option><option value="latest">latest</option>
           </select>
+          <input type="date" value={f.start_date} onChange={e => setF({ ...f, start_date: e.target.value })}
+            className="input" style={{ width: 160 }} title="Tracking starts from this date" />
           <button onClick={save} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
           <button onClick={() => setEditing(false)} className="px-3 py-2 rounded-lg text-sm surface-2">Cancel</button>
           <button onClick={() => { if (confirm('Remove "' + kpi.name + '" from the scorecard?')) onRemove(kpi.id); }}
@@ -2618,7 +2634,7 @@ function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove 
 }
 
 function KpiAddForm({ cadence, onAdd, onClose }) {
-  const [f, setF] = useState({ name: '', category: '', owner_name: '', goal_op: '>=', goal_value: '', unit: '', agg: 'sum' });
+  const [f, setF] = useState({ name: '', category: '', owner_name: '', goal_op: '>=', goal_value: '', unit: '', agg: 'sum', start_date: '' });
   const submit = () => {
     if (!f.name.trim()) return;
     onAdd({
@@ -2630,6 +2646,7 @@ function KpiAddForm({ cadence, onAdd, onClose }) {
       goal_value: String(f.goal_value).trim() === '' ? null : Number(f.goal_value),
       unit: f.unit.trim() || null,
       agg: f.agg,
+      start_date: f.start_date || null,
     });
     onClose();
   };
@@ -2649,6 +2666,8 @@ function KpiAddForm({ cadence, onAdd, onClose }) {
           title="How the header figure is summarised across periods">
           <option value="sum">total</option><option value="avg">average</option><option value="latest">latest</option>
         </select>
+        <input type="date" value={f.start_date} onChange={e => setF({ ...f, start_date: e.target.value })}
+          className="input" style={{ width: 160 }} title="Tracking starts from this date" />
         <button onClick={submit} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Add</button>
         <button onClick={onClose} className="px-3 py-2 rounded-lg text-sm surface-2">Cancel</button>
       </div>
@@ -2662,8 +2681,7 @@ function KpisView({ coacheeId, authedEmail }) {
   const [adding, setAdding] = useState(false);
   const [offset, setOffset] = useState(0);   // periods shifted back from today
 
-  const count = cadence === 'daily' ? 10 : 8;
-  const periods = useMemo(() => periodsFor(cadence, count, offset), [cadence, count, offset]);
+  const count = cadence === 'daily' ? 14 : 10;   // max columns on screen at once
 
   if (defs === null) return (
     <div className="fade-in">
@@ -2676,6 +2694,18 @@ function KpisView({ coacheeId, authedEmail }) {
   const counts = {};
   CADENCES.forEach(c => { counts[c.id] = defs.filter(d => d.cadence === c.id).length; });
   const rows = defs.filter(d => d.cadence === cadence);
+
+  // Anchor = earliest start date among the KPIs on this tab.
+  const starts = rows.map(r => r.start_date).filter(Boolean).sort();
+  const anchor = starts[0] || isoDay(new Date());
+  const allPeriods = periodsFromAnchor(cadence, anchor, 1);
+  const size = Math.min(count, allPeriods.length);
+  const maxOffset = Math.max(0, allPeriods.length - size);
+  const clamped = Math.min(offset, maxOffset);
+  const startIdx = Math.max(0, allPeriods.length - size - clamped);
+  const periods = allPeriods.slice(startIdx, startIdx + size);
+  const atOldest = clamped >= maxOffset;
+
   const groups = [];
   rows.forEach(r => {
     const key = (r.category || 'GENERAL').toUpperCase();
@@ -2712,17 +2742,21 @@ function KpisView({ coacheeId, authedEmail }) {
 
       {rows.length > 0 && (
         <div className="flex items-center gap-2 mb-3">
-          <button onClick={() => setOffset(o => o + count)} title="Earlier periods"
-            className="px-3 py-1.5 rounded-lg text-sm surface-2">‹ Earlier</button>
-          <button onClick={() => setOffset(o => Math.max(0, o - count))} disabled={offset === 0}
+          <button onClick={() => setOffset(o => Math.min(maxOffset, o + count))} disabled={atOldest}
+            title="Earlier periods"
+            className="px-3 py-1.5 rounded-lg text-sm surface-2"
+            style={{ opacity: atOldest ? 0.4 : 1 }}>‹ Earlier</button>
+          <button onClick={() => setOffset(o => Math.max(0, o - count))} disabled={clamped === 0}
             title="Later periods"
             className="px-3 py-1.5 rounded-lg text-sm surface-2"
-            style={{ opacity: offset === 0 ? 0.4 : 1 }}>Later ›</button>
-          {offset > 0 && (
+            style={{ opacity: clamped === 0 ? 0.4 : 1 }}>Later ›</button>
+          {clamped > 0 && (
             <button onClick={() => setOffset(0)} className="text-primary text-sm hover:underline ml-1">Back to today</button>
           )}
           <span className="text-faint text-xs ml-auto">
-            {periodLabel(cadence, periods[0]).join(' ')} — {periodLabel(cadence, periods[periods.length - 1]).join(' ')}
+            Tracking from {new Date(anchor + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}
+            {' · '}showing {periodLabel(cadence, periods[0]).join(' ')} — {periodLabel(cadence, periods[periods.length - 1]).join(' ')}
+            {allPeriods.length > size ? ' of ' + allPeriods.length : ''}
           </span>
         </div>
       )}
