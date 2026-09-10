@@ -216,7 +216,7 @@ function useCoacheeData(authedEmail) {
     }
     if (sb) {
       // RLS returns every row this user can access (own row + any aliased rows for coach mode)
-      sb.from('coachees').select('email, folder, data').order('folder')
+      sb.from('coachees').select('id, email, folder, data').order('folder')
         .then(({ data: result, error: err }) => {
           if (err) { setError(err.message); return; }
           if (!result || result.length === 0) { setError('NO_DASHBOARD'); return; }
@@ -267,7 +267,7 @@ function useCoacheeData(authedEmail) {
     preferredName: r.data?.profile?.preferredName,
   })) || [];
 
-  return { data, error, updateProfileField, updateData, coachees, activeFolder: activeRow?.folder, setActiveFolder };
+  return { data, error, updateProfileField, updateData, coachees, coacheeId: activeRow?.id, activeFolder: activeRow?.folder, setActiveFolder };
 }
 
 /* =====================================================================
@@ -899,8 +899,12 @@ const NAV = [
   // The 'FINANCE' section is appended dynamically when data.financials.enabled is true.
 ];
 
-function buildNav(data) {
-  const nav = [...NAV];
+function buildNav(data, showKpis = false) {
+  const nav = NAV.map(sec => ({ ...sec, items: [...sec.items] }));
+  if (showKpis) {
+    const journey = nav.find(sec => sec.section === 'JOURNEY');
+    if (journey) journey.items.push({ id: 'kpis', icon: 'trending', label: 'KPIs', route: '/kpis' });
+  }
   if (data?.clientNotes?.length) {
     nav.push({ section: 'FROM YOU', items: [
       { id: 'notes', icon: 'envelope', label: 'Your Notes', route: '/notes' },
@@ -914,8 +918,8 @@ function buildNav(data) {
   return nav;
 }
 
-function Sidebar({ activeId, onNav, onSignOut, profile, badges = {}, data }) {
-  const sections = useMemo(() => buildNav(data), [data]);
+function Sidebar({ activeId, onNav, onSignOut, profile, badges = {}, data, showKpis = false }) {
+  const sections = useMemo(() => buildNav(data, showKpis), [data, showKpis]);
   return (
     <aside className="desktop-sidebar w-60 surface flex flex-col flex-shrink-0" style={{ borderRadius: 0, borderTop: 0, borderBottom: 0, borderLeft: 0 }}>
       <div className="p-5 border-b border-default">
@@ -2323,9 +2327,387 @@ function MessagesView({ data }) {
 }
 
 /* =====================================================================
+   VIEW: KPIs
+   Definitions live in public.kpi_definitions, values in public.kpi_values.
+   Deliberately NOT in the data JSONB: a cell edit is a single-row write,
+   and the login payload stays flat regardless of how much history builds up.
+   ===================================================================== */
+const CADENCES = [
+  { id: 'daily', label: 'Daily' },
+  { id: 'weekly', label: 'Weekly' },
+  { id: 'monthly', label: 'Monthly' },
+  { id: 'quarterly', label: 'Quarterly' },
+];
+const GOAL_OPS = ['>=', '<=', '=', '>', '<'];
+const OP_GLYPH = { '>=': '≥', '<=': '≤', '=': '=', '>': '>', '<': '<' };
+const MON3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+const isoDay = (d) => d.toISOString().slice(0, 10);
+
+// Start of the bucket that `d` falls into, for a given cadence.
+function periodStart(cadence, d) {
+  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  if (cadence === 'daily') return isoDay(x);
+  if (cadence === 'weekly') { const dow = (x.getUTCDay() + 6) % 7; x.setUTCDate(x.getUTCDate() - dow); return isoDay(x); }
+  if (cadence === 'monthly') return isoDay(new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), 1)));
+  return isoDay(new Date(Date.UTC(x.getUTCFullYear(), Math.floor(x.getUTCMonth() / 3) * 3, 1)));
+}
+function shiftPeriod(cadence, iso, n) {
+  const d = new Date(iso + 'T00:00:00Z');
+  if (cadence === 'daily') d.setUTCDate(d.getUTCDate() + n);
+  else if (cadence === 'weekly') d.setUTCDate(d.getUTCDate() + n * 7);
+  else if (cadence === 'monthly') d.setUTCMonth(d.getUTCMonth() + n);
+  else d.setUTCMonth(d.getUTCMonth() + n * 3);
+  return isoDay(d);
+}
+function periodLabel(cadence, iso) {
+  const d = new Date(iso + 'T00:00:00Z');
+  const dd = d.getUTCDate(), mm = MON3[d.getUTCMonth()], yy = String(d.getUTCFullYear()).slice(2);
+  if (cadence === 'daily') return [dd + ' ' + mm, "'" + yy];
+  if (cadence === 'weekly') { const e = new Date(d); e.setUTCDate(e.getUTCDate() + 6);
+    return [dd + ' ' + mm, e.getUTCDate() + ' ' + MON3[e.getUTCMonth()]]; }
+  if (cadence === 'monthly') return [mm, "'" + yy];
+  return ['Q' + (Math.floor(d.getUTCMonth() / 3) + 1), "'" + yy];
+}
+function periodsFor(cadence, count) {
+  const now = periodStart(cadence, new Date());
+  const out = [];
+  for (let i = count - 1; i >= 0; i--) out.push(shiftPeriod(cadence, now, -i));
+  return out;
+}
+function meetsGoal(v, op, goal) {
+  if (v === null || v === undefined || goal === null || goal === undefined) return null;
+  const a = Number(v), b = Number(goal);
+  if (op === '>=') return a >= b;
+  if (op === '<=') return a <= b;
+  if (op === '>')  return a > b;
+  if (op === '<')  return a < b;
+  return a === b;
+}
+function fmtNum(v) {
+  if (v === null || v === undefined || v === '') return '';
+  const n = Number(v);
+  if (!isFinite(n)) return String(v);
+  const abs = Math.abs(n);
+  if (abs >= 1e6) return (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M';
+  if (abs >= 1000) return (n / 1000).toFixed(2).replace(/\.?0+$/, '') + 'K';
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+}
+
+function useKpis(coacheeId, authedEmail) {
+  const [defs, setDefs] = useState(null);
+  const [values, setValues] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!sb || !coacheeId) { setDefs([]); setValues({}); return; }
+    const { data: d, error: e1 } = await sb.from('kpi_definitions')
+      .select('*').eq('coachee_id', coacheeId).eq('active', true)
+      .order('sort_order', { ascending: true });
+    if (e1) { console.error('KPI definitions load failed:', e1); setDefs([]); return; }
+    setDefs(d || []);
+    const ids = (d || []).map(x => x.id);
+    if (!ids.length) { setValues({}); return; }
+    const { data: v, error: e2 } = await sb.from('kpi_values')
+      .select('kpi_id, period_start, value').in('kpi_id', ids);
+    if (e2) { console.error('KPI values load failed:', e2); return; }
+    const map = {};
+    (v || []).forEach(r => { map[r.kpi_id + '|' + r.period_start] = r.value; });
+    setValues(map);
+  }, [coacheeId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const setValue = async (kpiId, period, raw) => {
+    const key = kpiId + '|' + period;
+    const trimmed = String(raw == null ? '' : raw).trim();
+    const clean = trimmed === '' ? null : Number(trimmed.replace(/[, ]/g, ''));
+    if (clean !== null && !isFinite(clean)) return;
+    setValues(prev => { const n = { ...prev }; if (clean === null) delete n[key]; else n[key] = clean; return n; });
+    if (!sb) return;
+    setSaving(true);
+    try {
+      if (clean === null) {
+        await sb.from('kpi_values').delete().eq('kpi_id', kpiId).eq('period_start', period);
+      } else {
+        const { error } = await sb.from('kpi_values').upsert(
+          { kpi_id: kpiId, period_start: period, value: clean, entered_by: authedEmail || null, updated_at: new Date().toISOString() },
+          { onConflict: 'kpi_id,period_start' });
+        if (error) console.error('KPI value save failed:', error);
+      }
+    } finally { setSaving(false); }
+  };
+
+  const addKpi = async (fields) => {
+    if (!sb || !coacheeId) return;
+    const sort = (defs || []).filter(d => d.cadence === fields.cadence).length;
+    const { error } = await sb.from('kpi_definitions').insert({ coachee_id: coacheeId, sort_order: sort, ...fields });
+    if (error) { console.error('KPI add failed:', error); alert('Could not add KPI: ' + error.message); return; }
+    await load();
+  };
+  const updateKpi = async (id, patch) => {
+    setDefs(prev => prev.map(d => (d.id === id ? { ...d, ...patch } : d)));
+    if (!sb) return;
+    const { error } = await sb.from('kpi_definitions')
+      .update({ ...patch, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) console.error('KPI update failed:', error);
+  };
+  const removeKpi = async (id) => {
+    setDefs(prev => prev.filter(d => d.id !== id));
+    if (!sb) return;
+    const { error } = await sb.from('kpi_definitions').update({ active: false }).eq('id', id);
+    if (error) console.error('KPI remove failed:', error);
+  };
+
+  return { defs, values, saving, setValue, addKpi, updateKpi, removeKpi };
+}
+
+function KpiCell({ kpi, period, value, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const has = value !== undefined && value !== null;
+  const hit = meetsGoal(has ? value : null, kpi.goal_op, kpi.goal_value);
+  const bg = !has ? 'transparent' : hit === null ? 'var(--surface-2)'
+    : hit ? 'rgba(52,211,153,0.15)' : 'rgba(244,63,94,0.13)';
+  const fg = hit === null ? 'var(--text)' : hit ? '#34d399' : '#f43f5e';
+
+  const commit = () => { setEditing(false); if (draft !== String(has ? value : '')) onSave(draft); };
+
+  if (editing) return (
+    <td className="p-0" style={{ minWidth: 92 }}>
+      <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
+        className="w-full text-center text-sm"
+        style={{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--primary)', borderRadius: 6, padding: '10px 6px', outline: 'none' }} />
+    </td>
+  );
+  return (
+    <td onClick={() => { setDraft(has ? String(value) : ''); setEditing(true); }}
+      title="Click to edit"
+      className="text-center text-sm cursor-pointer"
+      style={{ minWidth: 92, background: bg, color: fg, borderRadius: 6, padding: '10px 6px', fontWeight: has ? 600 : 400 }}>
+      {has ? fmtNum(value) : ''}
+    </td>
+  );
+}
+
+function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove }) {
+  const [editing, setEditing] = useState(false);
+  const [f, setF] = useState({ name: kpi.name, goal_op: kpi.goal_op, goal_value: kpi.goal_value ?? '', unit: kpi.unit || '', owner_name: kpi.owner_name || '', category: kpi.category || '' });
+
+  const all = Object.entries(values).filter(([k]) => k.startsWith(kpi.id + '|')).map(([, v]) => Number(v));
+  const sum = all.length ? all.reduce((a, b) => a + b, 0) : null;
+  const avg = all.length ? sum / all.length : null;
+
+  const save = () => {
+    setEditing(false);
+    onUpdate(kpi.id, {
+      name: f.name.trim() || kpi.name,
+      goal_op: f.goal_op,
+      goal_value: String(f.goal_value).trim() === '' ? null : Number(f.goal_value),
+      unit: f.unit.trim() || null,
+      owner_name: f.owner_name.trim() || null,
+      category: f.category.trim() || null,
+    });
+  };
+
+  if (editing) return (
+    <tr>
+      <td colSpan={4 + periods.length} className="p-3" style={{ background: 'var(--surface-2)', borderRadius: 8 }}>
+        <div className="flex flex-wrap gap-2 items-center">
+          <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="KPI name" className="input" style={{ minWidth: 220 }} />
+          <input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} placeholder="Group" className="input" style={{ width: 150 }} />
+          <input value={f.owner_name} onChange={e => setF({ ...f, owner_name: e.target.value })} placeholder="Who" className="input" style={{ width: 120 }} />
+          <select value={f.goal_op} onChange={e => setF({ ...f, goal_op: e.target.value })} className="input" style={{ width: 70 }}>
+            {GOAL_OPS.map(o => <option key={o} value={o}>{OP_GLYPH[o]}</option>)}
+          </select>
+          <input value={f.goal_value} onChange={e => setF({ ...f, goal_value: e.target.value })} placeholder="Goal (blank = none)" className="input" style={{ width: 160 }} />
+          <input value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })} placeholder="Unit" className="input" style={{ width: 110 }} />
+          <button onClick={save} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
+          <button onClick={() => setEditing(false)} className="px-3 py-2 rounded-lg text-sm surface-2">Cancel</button>
+          <button onClick={() => { if (confirm('Remove "' + kpi.name + '" from the scorecard?')) onRemove(kpi.id); }}
+            className="px-3 py-2 rounded-lg text-sm ml-auto" style={{ color: '#f43f5e' }}>Remove</button>
+        </div>
+      </td>
+    </tr>
+  );
+
+  return (
+    <tr>
+      <td className="pr-3 py-2" style={{ minWidth: 230, position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 2 }}>
+        <div className="flex items-center gap-2">
+          {kpi.owner_name && (
+            <span className="text-[10px] font-bold rounded-full flex items-center justify-center flex-shrink-0"
+              style={{ width: 22, height: 22, background: 'var(--primary-soft)', color: 'var(--primary)' }}>
+              {kpi.owner_name.split(' ').map(w => w[0]).slice(0, 2).join('')}
+            </span>
+          )}
+          <button onClick={() => setEditing(true)} className="text-sm text-left hover:underline" style={{ color: 'var(--text)' }}>
+            {kpi.name}
+          </button>
+        </div>
+      </td>
+      <td className="px-3 text-xs whitespace-nowrap" style={{ color: 'var(--dim)' }}>
+        {kpi.goal_value === null || kpi.goal_value === undefined
+          ? <span className="text-faint">— set goal —</span>
+          : <span>{OP_GLYPH[kpi.goal_op]} {fmtNum(kpi.goal_value)}{kpi.unit && kpi.unit !== 'count' ? ' ' + kpi.unit : ''}</span>}
+      </td>
+      <td className="px-3 text-xs text-right whitespace-nowrap" style={{ color: 'var(--dim)' }}>{sum === null ? '' : fmtNum(sum)}</td>
+      <td className="px-3 text-xs text-right whitespace-nowrap pr-5" style={{ color: 'var(--dim)' }}>{avg === null ? '' : fmtNum(avg)}</td>
+      {periods.map(p => (
+        <KpiCell key={p} kpi={kpi} period={p} value={values[kpi.id + '|' + p]}
+          onSave={(raw) => onSetValue(kpi.id, p, raw)} />
+      ))}
+    </tr>
+  );
+}
+
+function KpiAddForm({ cadence, onAdd, onClose }) {
+  const [f, setF] = useState({ name: '', category: '', owner_name: '', goal_op: '>=', goal_value: '', unit: '' });
+  const submit = () => {
+    if (!f.name.trim()) return;
+    onAdd({
+      cadence,
+      name: f.name.trim(),
+      category: f.category.trim() || null,
+      owner_name: f.owner_name.trim() || null,
+      goal_op: f.goal_op,
+      goal_value: String(f.goal_value).trim() === '' ? null : Number(f.goal_value),
+      unit: f.unit.trim() || null,
+    });
+    onClose();
+  };
+  return (
+    <div className="surface rounded-xl p-4 mb-4">
+      <p className="text-xs tracking-widest text-faint mb-3">NEW {cadence.toUpperCase()} KPI</p>
+      <div className="flex flex-wrap gap-2 items-center">
+        <input autoFocus value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="KPI name" className="input" style={{ minWidth: 230 }} />
+        <input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} placeholder="Group (e.g. SALES)" className="input" style={{ width: 170 }} />
+        <input value={f.owner_name} onChange={e => setF({ ...f, owner_name: e.target.value })} placeholder="Who" className="input" style={{ width: 120 }} />
+        <select value={f.goal_op} onChange={e => setF({ ...f, goal_op: e.target.value })} className="input" style={{ width: 70 }}>
+          {GOAL_OPS.map(o => <option key={o} value={o}>{OP_GLYPH[o]}</option>)}
+        </select>
+        <input value={f.goal_value} onChange={e => setF({ ...f, goal_value: e.target.value })} placeholder="Goal (optional)" className="input" style={{ width: 150 }} />
+        <input value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })} placeholder="Unit" className="input" style={{ width: 110 }} />
+        <button onClick={submit} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Add</button>
+        <button onClick={onClose} className="px-3 py-2 rounded-lg text-sm surface-2">Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function KpisView({ coacheeId, authedEmail }) {
+  const { defs, values, saving, setValue, addKpi, updateKpi, removeKpi } = useKpis(coacheeId, authedEmail);
+  const [cadence, setCadence] = useState('weekly');
+  const [adding, setAdding] = useState(false);
+
+  const count = cadence === 'daily' ? 10 : 8;
+  const periods = useMemo(() => periodsFor(cadence, count), [cadence, count]);
+
+  if (defs === null) return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">SCORECARD</p>
+      <h1 className="text-3xl font-bold mb-2">KPIs</h1>
+      <p className="text-faint text-sm">Loading…</p>
+    </div>
+  );
+
+  const counts = {};
+  CADENCES.forEach(c => { counts[c.id] = defs.filter(d => d.cadence === c.id).length; });
+  const rows = defs.filter(d => d.cadence === cadence);
+  const groups = [];
+  rows.forEach(r => {
+    const key = (r.category || 'GENERAL').toUpperCase();
+    let g = groups.find(x => x.key === key);
+    if (!g) { g = { key, items: [] }; groups.push(g); }
+    g.items.push(r);
+  });
+
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">SCORECARD</p>
+      <div className="flex items-start justify-between flex-wrap gap-3 mb-2">
+        <h1 className="text-3xl font-bold">KPIs</h1>
+        <button onClick={() => setAdding(a => !a)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">+ Add KPI</button>
+      </div>
+      <p className="text-dim mb-6 reading" style={{ fontSize: '15px' }}>
+        The numbers you keep. Click any cell to enter a value, or a KPI name to edit its goal.
+        {saving && <span className="text-faint"> · saving…</span>}
+      </p>
+
+      <div className="flex gap-2 mb-5 flex-wrap">
+        {CADENCES.map(c => (
+          <button key={c.id} onClick={() => setCadence(c.id)}
+            className="px-4 py-2 rounded-lg text-sm font-semibold"
+            style={cadence === c.id
+              ? { background: 'var(--primary-soft)', color: 'var(--primary)' }
+              : { color: 'var(--dim)' }}>
+            {c.label} ({counts[c.id] || 0})
+          </button>
+        ))}
+      </div>
+
+      {adding && <KpiAddForm cadence={cadence} onAdd={addKpi} onClose={() => setAdding(false)} />}
+
+      {rows.length === 0 ? (
+        <EmptyState icon="trending" title={'No ' + cadence + ' KPIs yet.'}
+          body={'Add the numbers you want to hold yourself to. You can set a goal now or leave it blank and fill it in later.'} />
+      ) : (
+        <div className="surface rounded-2xl p-4" style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'separate', borderSpacing: '0 6px', width: '100%' }}>
+            <thead>
+              <tr className="text-xs text-faint">
+                <th className="text-left pb-2" style={{ position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 3 }}>KPI</th>
+                <th className="text-left pb-2 px-3">Goal</th>
+                <th className="text-right pb-2 px-3">Sum</th>
+                <th className="text-right pb-2 px-3 pr-5">Avg</th>
+                {periods.map(p => {
+                  const [a, b] = periodLabel(cadence, p);
+                  return (
+                    <th key={p} className="pb-2 text-center font-normal" style={{ minWidth: 92 }}>
+                      <div style={{ lineHeight: 1.25 }}>{a}</div>
+                      <div style={{ lineHeight: 1.25 }}>{b}</div>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map(g => (
+                <React.Fragment key={g.key}>
+                  <tr>
+                    <td colSpan={4 + periods.length} className="pt-3 pb-1">
+                      <span className="text-[10px] tracking-[0.18em] text-faint">{g.key}</span>
+                    </td>
+                  </tr>
+                  {g.items.map(k => (
+                    <KpiRow key={k.id} kpi={k} periods={periods} values={values} cadence={cadence}
+                      onSetValue={setValue} onUpdate={updateKpi} onRemove={removeKpi} />
+                  ))}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =====================================================================
    APP SHELL
    ===================================================================== */
-function AppShell({ data, signOut, updateProfileField, updateData, coachees, activeFolder, setActiveFolder, authedEmail }) {
+function AppShell({ data, signOut, updateProfileField, updateData, coachees, coacheeId, activeFolder, setActiveFolder, authedEmail }) {
+  const [kpiCount, setKpiCount] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    if (!sb || !coacheeId) { setKpiCount(0); return; }
+    sb.from('kpi_definitions').select('id', { count: 'exact', head: true })
+      .eq('coachee_id', coacheeId).eq('active', true)
+      .then(({ count }) => { if (!cancelled) setKpiCount(count || 0); });
+    return () => { cancelled = true; };
+  }, [coacheeId]);
+  const showKpis = kpiCount > 0 || isCoachEmail(authedEmail);
   const [route, go] = useHashRoute();
   const [theme, toggleTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -2374,12 +2756,13 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, act
     if (seg === 'messages') return <MessagesView data={data} />;
     if (seg === 'notes') return <NotesView data={data} />;
     if (seg === 'financials') return <FinancialsView data={data} />;
+    if (seg === 'kpis') return <KpisView coacheeId={coacheeId} authedEmail={authedEmail} />;
     return <OverviewView data={data} onNav={go} />;
-  }, [route, data, actionItems, priorities]);
+  }, [route, data, actionItems, priorities, coacheeId, authedEmail]);
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount }} data={data} />
+      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount }} data={data} showKpis={showKpis} />
       <div className="flex-1 flex flex-col main-content min-w-0">
         <TopBar profile={data.profile} onSearch={() => setSearchOpen(true)} onToggleTheme={toggleTheme} theme={theme} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />
         <main className="flex-1 p-5 md:p-10 overflow-y-auto" key={route}>
@@ -2400,7 +2783,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, act
    ===================================================================== */
 function App() {
   const { session, loading, sendMagicLink, verifyEmailOtp, signInWithProvider, signOut, authedEmail } = useAuth();
-  const { data, error, updateProfileField, updateData, coachees, activeFolder, setActiveFolder } = useCoacheeData(authedEmail);
+  const { data, error, updateProfileField, updateData, coachees, coacheeId, activeFolder, setActiveFolder } = useCoacheeData(authedEmail);
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center">
@@ -2442,7 +2825,7 @@ function App() {
     </div>
   );
 
-  return <AppShell data={data} signOut={signOut} updateProfileField={updateProfileField} updateData={updateData} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} authedEmail={authedEmail} />;
+  return <AppShell data={data} signOut={signOut} updateProfileField={updateProfileField} updateData={updateData} coachees={coachees} coacheeId={coacheeId} activeFolder={activeFolder} setActiveFolder={setActiveFolder} authedEmail={authedEmail} />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
