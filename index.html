@@ -2369,8 +2369,8 @@ function periodLabel(cadence, iso) {
   if (cadence === 'monthly') return [mm, "'" + yy];
   return ['Q' + (Math.floor(d.getUTCMonth() / 3) + 1), "'" + yy];
 }
-function periodsFor(cadence, count) {
-  const now = periodStart(cadence, new Date());
+function periodsFor(cadence, count, offset = 0) {
+  const now = shiftPeriod(cadence, periodStart(cadence, new Date()), -offset);
   const out = [];
   for (let i = count - 1; i >= 0; i--) out.push(shiftPeriod(cadence, now, -i));
   return out;
@@ -2384,6 +2384,45 @@ function meetsGoal(v, op, goal) {
   if (op === '<')  return a < b;
   return a === b;
 }
+// How a row is summarised across periods.
+//   sum    — flow measures that accumulate (revenue, counts of things done)
+//   avg    — rate / duration / state measures (AR days, sleep hrs, %, HRV)
+//   latest — point-in-time stocks where only the current value means anything (ARR, ENPS)
+// Summing a rate is meaningless, which is why this is per-KPI rather than a single Sum column.
+function summarise(kpi, values, periods) {
+  const series = periods.map(p => {
+    const v = values[kpi.id + '|' + p];
+    return v === undefined || v === null ? null : Number(v);
+  });
+  const inWindow = series.filter(v => v !== null);
+  const all = Object.entries(values)
+    .filter(([k]) => k.startsWith(kpi.id + '|')).map(([, v]) => Number(v));
+
+  let agg = null;
+  if (all.length && kpi.agg !== 'latest') {
+    const total = all.reduce((a, b) => a + b, 0);
+    agg = kpi.agg === 'sum' ? total : total / all.length;
+  }
+
+  let latest = null, prev = null;
+  for (let i = series.length - 1; i >= 0; i--) {
+    if (series[i] === null) continue;
+    if (latest === null) latest = series[i];
+    else { prev = series[i]; break; }
+  }
+
+  const scored = inWindow.filter(v => meetsGoal(v, kpi.goal_op, kpi.goal_value) !== null);
+  const hits = scored.filter(v => meetsGoal(v, kpi.goal_op, kpi.goal_value)).length;
+
+  let trend = null;
+  if (latest !== null && prev !== null && latest !== prev) {
+    const up = latest > prev;
+    const lowerIsBetter = kpi.goal_op === '<=' || kpi.goal_op === '<';
+    trend = { up, good: lowerIsBetter ? !up : up };
+  }
+  return { latest, agg, trend, hits, scored: scored.length };
+}
+
 function fmtNum(v) {
   if (v === null || v === undefined || v === '') return '';
   const n = Number(v);
@@ -2493,11 +2532,9 @@ function KpiCell({ kpi, period, value, onSave }) {
 
 function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove }) {
   const [editing, setEditing] = useState(false);
-  const [f, setF] = useState({ name: kpi.name, goal_op: kpi.goal_op, goal_value: kpi.goal_value ?? '', unit: kpi.unit || '', owner_name: kpi.owner_name || '', category: kpi.category || '' });
+  const [f, setF] = useState({ name: kpi.name, goal_op: kpi.goal_op, goal_value: kpi.goal_value ?? '', unit: kpi.unit || '', owner_name: kpi.owner_name || '', category: kpi.category || '', agg: kpi.agg || 'avg' });
 
-  const all = Object.entries(values).filter(([k]) => k.startsWith(kpi.id + '|')).map(([, v]) => Number(v));
-  const sum = all.length ? all.reduce((a, b) => a + b, 0) : null;
-  const avg = all.length ? sum / all.length : null;
+  const { latest, agg, trend, hits, scored } = summarise(kpi, values, periods);
 
   const save = () => {
     setEditing(false);
@@ -2508,12 +2545,13 @@ function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove 
       unit: f.unit.trim() || null,
       owner_name: f.owner_name.trim() || null,
       category: f.category.trim() || null,
+      agg: f.agg,
     });
   };
 
   if (editing) return (
     <tr>
-      <td colSpan={4 + periods.length} className="p-3" style={{ background: 'var(--surface-2)', borderRadius: 8 }}>
+      <td colSpan={5 + periods.length} className="p-3" style={{ background: 'var(--surface-2)', borderRadius: 8 }}>
         <div className="flex flex-wrap gap-2 items-center">
           <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="KPI name" className="input" style={{ minWidth: 220 }} />
           <input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} placeholder="Group" className="input" style={{ width: 150 }} />
@@ -2523,6 +2561,10 @@ function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove 
           </select>
           <input value={f.goal_value} onChange={e => setF({ ...f, goal_value: e.target.value })} placeholder="Goal (blank = none)" className="input" style={{ width: 160 }} />
           <input value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })} placeholder="Unit" className="input" style={{ width: 110 }} />
+          <select value={f.agg} onChange={e => setF({ ...f, agg: e.target.value })} className="input" style={{ width: 110 }}
+            title="How the header figure is summarised across periods">
+            <option value="sum">total</option><option value="avg">average</option><option value="latest">latest</option>
+          </select>
           <button onClick={save} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
           <button onClick={() => setEditing(false)} className="px-3 py-2 rounded-lg text-sm surface-2">Cancel</button>
           <button onClick={() => { if (confirm('Remove "' + kpi.name + '" from the scorecard?')) onRemove(kpi.id); }}
@@ -2552,8 +2594,21 @@ function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove 
           ? <span className="text-faint">— set goal —</span>
           : <span>{OP_GLYPH[kpi.goal_op]} {fmtNum(kpi.goal_value)}{kpi.unit && kpi.unit !== 'count' ? ' ' + kpi.unit : ''}</span>}
       </td>
-      <td className="px-3 text-xs text-right whitespace-nowrap" style={{ color: 'var(--dim)' }}>{sum === null ? '' : fmtNum(sum)}</td>
-      <td className="px-3 text-xs text-right whitespace-nowrap pr-5" style={{ color: 'var(--dim)' }}>{avg === null ? '' : fmtNum(avg)}</td>
+      <td className="px-3 text-xs text-right whitespace-nowrap" style={{ color: 'var(--text)' }}>
+        {latest === null ? '' : (
+          <span className="inline-flex items-center gap-1 justify-end">
+            <span style={{ fontWeight: 600 }}>{fmtNum(latest)}</span>
+            {trend && <span style={{ color: trend.good ? '#34d399' : '#f43f5e', fontSize: 11 }}>{trend.up ? '▲' : '▼'}</span>}
+          </span>
+        )}
+      </td>
+      <td className="px-3 text-xs text-right whitespace-nowrap" style={{ color: 'var(--dim)' }}>
+        {agg === null ? '' : <span>{fmtNum(agg)} <span className="text-faint" style={{ fontSize: 9 }}>{kpi.agg}</span></span>}
+      </td>
+      <td className="px-3 text-xs text-right whitespace-nowrap pr-5" style={{ color: 'var(--dim)' }}>
+        {scored === 0 ? <span className="text-faint">—</span>
+          : <span style={{ color: hits === scored ? '#34d399' : hits === 0 ? '#f43f5e' : 'var(--dim)' }}>{hits}/{scored}</span>}
+      </td>
       {periods.map(p => (
         <KpiCell key={p} kpi={kpi} period={p} value={values[kpi.id + '|' + p]}
           onSave={(raw) => onSetValue(kpi.id, p, raw)} />
@@ -2563,7 +2618,7 @@ function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove 
 }
 
 function KpiAddForm({ cadence, onAdd, onClose }) {
-  const [f, setF] = useState({ name: '', category: '', owner_name: '', goal_op: '>=', goal_value: '', unit: '' });
+  const [f, setF] = useState({ name: '', category: '', owner_name: '', goal_op: '>=', goal_value: '', unit: '', agg: 'sum' });
   const submit = () => {
     if (!f.name.trim()) return;
     onAdd({
@@ -2574,6 +2629,7 @@ function KpiAddForm({ cadence, onAdd, onClose }) {
       goal_op: f.goal_op,
       goal_value: String(f.goal_value).trim() === '' ? null : Number(f.goal_value),
       unit: f.unit.trim() || null,
+      agg: f.agg,
     });
     onClose();
   };
@@ -2589,6 +2645,10 @@ function KpiAddForm({ cadence, onAdd, onClose }) {
         </select>
         <input value={f.goal_value} onChange={e => setF({ ...f, goal_value: e.target.value })} placeholder="Goal (optional)" className="input" style={{ width: 150 }} />
         <input value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })} placeholder="Unit" className="input" style={{ width: 110 }} />
+        <select value={f.agg} onChange={e => setF({ ...f, agg: e.target.value })} className="input" style={{ width: 110 }}
+          title="How the header figure is summarised across periods">
+          <option value="sum">total</option><option value="avg">average</option><option value="latest">latest</option>
+        </select>
         <button onClick={submit} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Add</button>
         <button onClick={onClose} className="px-3 py-2 rounded-lg text-sm surface-2">Cancel</button>
       </div>
@@ -2600,9 +2660,10 @@ function KpisView({ coacheeId, authedEmail }) {
   const { defs, values, saving, setValue, addKpi, updateKpi, removeKpi } = useKpis(coacheeId, authedEmail);
   const [cadence, setCadence] = useState('weekly');
   const [adding, setAdding] = useState(false);
+  const [offset, setOffset] = useState(0);   // periods shifted back from today
 
   const count = cadence === 'daily' ? 10 : 8;
-  const periods = useMemo(() => periodsFor(cadence, count), [cadence, count]);
+  const periods = useMemo(() => periodsFor(cadence, count, offset), [cadence, count, offset]);
 
   if (defs === null) return (
     <div className="fade-in">
@@ -2637,7 +2698,7 @@ function KpisView({ coacheeId, authedEmail }) {
 
       <div className="flex gap-2 mb-5 flex-wrap">
         {CADENCES.map(c => (
-          <button key={c.id} onClick={() => setCadence(c.id)}
+          <button key={c.id} onClick={() => { setCadence(c.id); setOffset(0); }}
             className="px-4 py-2 rounded-lg text-sm font-semibold"
             style={cadence === c.id
               ? { background: 'var(--primary-soft)', color: 'var(--primary)' }
@@ -2649,6 +2710,23 @@ function KpisView({ coacheeId, authedEmail }) {
 
       {adding && <KpiAddForm cadence={cadence} onAdd={addKpi} onClose={() => setAdding(false)} />}
 
+      {rows.length > 0 && (
+        <div className="flex items-center gap-2 mb-3">
+          <button onClick={() => setOffset(o => o + count)} title="Earlier periods"
+            className="px-3 py-1.5 rounded-lg text-sm surface-2">‹ Earlier</button>
+          <button onClick={() => setOffset(o => Math.max(0, o - count))} disabled={offset === 0}
+            title="Later periods"
+            className="px-3 py-1.5 rounded-lg text-sm surface-2"
+            style={{ opacity: offset === 0 ? 0.4 : 1 }}>Later ›</button>
+          {offset > 0 && (
+            <button onClick={() => setOffset(0)} className="text-primary text-sm hover:underline ml-1">Back to today</button>
+          )}
+          <span className="text-faint text-xs ml-auto">
+            {periodLabel(cadence, periods[0]).join(' ')} — {periodLabel(cadence, periods[periods.length - 1]).join(' ')}
+          </span>
+        </div>
+      )}
+
       {rows.length === 0 ? (
         <EmptyState icon="trending" title={'No ' + cadence + ' KPIs yet.'}
           body={'Add the numbers you want to hold yourself to. You can set a goal now or leave it blank and fill it in later.'} />
@@ -2659,8 +2737,9 @@ function KpisView({ coacheeId, authedEmail }) {
               <tr className="text-xs text-faint">
                 <th className="text-left pb-2" style={{ position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 3 }}>KPI</th>
                 <th className="text-left pb-2 px-3">Goal</th>
-                <th className="text-right pb-2 px-3">Sum</th>
-                <th className="text-right pb-2 px-3 pr-5">Avg</th>
+                <th className="text-right pb-2 px-3">Latest</th>
+                <th className="text-right pb-2 px-3">Total</th>
+                <th className="text-right pb-2 px-3 pr-5" title="Periods on target, of periods with a value and a goal">On target</th>
                 {periods.map(p => {
                   const [a, b] = periodLabel(cadence, p);
                   return (
@@ -2676,7 +2755,7 @@ function KpisView({ coacheeId, authedEmail }) {
               {groups.map(g => (
                 <React.Fragment key={g.key}>
                   <tr>
-                    <td colSpan={4 + periods.length} className="pt-3 pb-1">
+                    <td colSpan={5 + periods.length} className="pt-3 pb-1">
                       <span className="text-[10px] tracking-[0.18em] text-faint">{g.key}</span>
                     </td>
                   </tr>
