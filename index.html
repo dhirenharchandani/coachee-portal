@@ -2514,38 +2514,60 @@ function useKpis(coacheeId, authedEmail) {
   return { defs, values, saving, setValue, addKpi, updateKpi, removeKpi };
 }
 
-function KpiCell({ kpi, period, value, onSave }) {
+const KPI_COLS = { name: 260, goal: 96, latest: 96, total: 96, ontarget: 84, period: 96 };
+
+function KpiField({ label, children, width }) {
+  return (
+    <label className="flex flex-col gap-1" style={{ width }}>
+      <span className="text-[10px] tracking-[0.12em] uppercase text-faint">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function KpiCell({ kpi, period, value, onSave, isCurrent }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const has = value !== undefined && value !== null;
   const hit = meetsGoal(has ? value : null, kpi.goal_op, kpi.goal_value);
-  const bg = !has ? 'transparent' : hit === null ? 'var(--surface-2)'
-    : hit ? 'rgba(52,211,153,0.15)' : 'rgba(244,63,94,0.13)';
-  const fg = hit === null ? 'var(--text)' : hit ? '#34d399' : '#f43f5e';
+
+  const bg = !has ? 'transparent'
+    : hit === null ? 'var(--surface-2)'
+    : hit ? 'rgba(52,211,153,0.16)' : 'rgba(244,63,94,0.14)';
+  const fg = !has ? 'var(--dim)' : hit === null ? 'var(--text)' : hit ? '#34d399' : '#f43f5e';
+  const border = has && hit !== null
+    ? (hit ? '1px solid rgba(52,211,153,0.4)' : '1px solid rgba(244,63,94,0.35)')
+    : '1px solid var(--border)';
 
   const commit = () => { setEditing(false); if (draft !== String(has ? value : '')) onSave(draft); };
 
-  if (editing) return (
-    <td className="p-0" style={{ minWidth: 92 }}>
-      <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit}
-        onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
-        className="w-full text-center text-sm"
-        style={{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--primary)', borderRadius: 6, padding: '10px 6px', outline: 'none' }} />
-    </td>
-  );
   return (
-    <td onClick={() => { setDraft(has ? String(value) : ''); setEditing(true); }}
-      title="Click to edit"
-      className="text-center text-sm cursor-pointer"
-      style={{ minWidth: 92, background: bg, color: fg, borderRadius: 6, padding: '10px 6px', fontWeight: has ? 600 : 400 }}>
-      {has ? fmtNum(value) : ''}
+    <td className="p-0" style={{ width: KPI_COLS.period }}>
+      {editing ? (
+        <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit}
+          onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
+          className="w-full text-center text-sm"
+          style={{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--primary)',
+                   borderRadius: 6, padding: '9px 4px', outline: 'none', margin: '0 2px', width: 'calc(100% - 4px)' }} />
+      ) : (
+        <div onClick={() => { setDraft(has ? String(value) : ''); setEditing(true); }}
+          title={has ? 'Click to edit' : 'Click to enter a value'}
+          className="text-center text-sm cursor-pointer"
+          style={{ background: bg, color: fg, border, borderRadius: 6, padding: '9px 4px',
+                   margin: '0 2px', fontWeight: has ? 600 : 400, minHeight: 36,
+                   boxShadow: isCurrent ? 'inset 0 0 0 1px var(--primary-soft)' : 'none' }}>
+          {has ? fmtNum(value) : <span style={{ opacity: 0.35 }}>+</span>}
+        </div>
+      )}
     </td>
   );
 }
 
-function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove }) {
+function KpiRow({ kpi, periods, values, cadence, currentPeriod, onSetValue, onUpdate, onRemove }) {
   const [editing, setEditing] = useState(false);
-  const [f, setF] = useState({ name: kpi.name, goal_op: kpi.goal_op, goal_value: kpi.goal_value ?? '', unit: kpi.unit || '', owner_name: kpi.owner_name || '', category: kpi.category || '', agg: kpi.agg || 'avg', start_date: kpi.start_date || '' });
+  const [f, setF] = useState({ name: kpi.name, goal_op: kpi.goal_op, goal_value: kpi.goal_value ?? '',
+    unit: kpi.unit || '', owner_name: kpi.owner_name || '', category: kpi.category || '',
+    agg: kpi.agg || 'avg', start_date: kpi.start_date || '' });
 
   const { latest, agg, trend, hits, scored } = summarise(kpi, values, periods);
 
@@ -2565,26 +2587,42 @@ function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove 
 
   if (editing) return (
     <tr>
-      <td colSpan={5 + periods.length} className="p-3" style={{ background: 'var(--surface-2)', borderRadius: 8 }}>
-        <div className="flex flex-wrap gap-2 items-center">
-          <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="KPI name" className="input" style={{ minWidth: 220 }} />
-          <input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} placeholder="Group" className="input" style={{ width: 150 }} />
-          <input value={f.owner_name} onChange={e => setF({ ...f, owner_name: e.target.value })} placeholder="Who" className="input" style={{ width: 120 }} />
-          <select value={f.goal_op} onChange={e => setF({ ...f, goal_op: e.target.value })} className="input" style={{ width: 70 }}>
-            {GOAL_OPS.map(o => <option key={o} value={o}>{OP_GLYPH[o]}</option>)}
-          </select>
-          <input value={f.goal_value} onChange={e => setF({ ...f, goal_value: e.target.value })} placeholder="Goal (blank = none)" className="input" style={{ width: 160 }} />
-          <input value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })} placeholder="Unit" className="input" style={{ width: 110 }} />
-          <select value={f.agg} onChange={e => setF({ ...f, agg: e.target.value })} className="input" style={{ width: 110 }}
-            title="How the header figure is summarised across periods">
-            <option value="sum">total</option><option value="avg">average</option><option value="latest">latest</option>
-          </select>
-          <input type="date" value={f.start_date} onChange={e => setF({ ...f, start_date: e.target.value })}
-            className="input" style={{ width: 160 }} title="Tracking starts from this date" />
-          <button onClick={save} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
-          <button onClick={() => setEditing(false)} className="px-3 py-2 rounded-lg text-sm surface-2">Cancel</button>
-          <button onClick={() => { if (confirm('Remove "' + kpi.name + '" from the scorecard?')) onRemove(kpi.id); }}
-            className="px-3 py-2 rounded-lg text-sm ml-auto" style={{ color: '#f43f5e' }}>Remove</button>
+      <td colSpan={5 + periods.length} className="p-4" style={{ background: 'var(--surface-2)', borderRadius: 10 }}>
+        <div className="flex flex-wrap gap-3 items-end">
+          <KpiField label="KPI name" width={260}>
+            <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} className="input" />
+          </KpiField>
+          <KpiField label="Group" width={150}>
+            <input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} placeholder="e.g. PIPELINE" className="input" />
+          </KpiField>
+          <KpiField label="Who" width={120}>
+            <input value={f.owner_name} onChange={e => setF({ ...f, owner_name: e.target.value })} className="input" />
+          </KpiField>
+          <KpiField label="Target" width={150}>
+            <div className="flex gap-1">
+              <select value={f.goal_op} onChange={e => setF({ ...f, goal_op: e.target.value })} className="input" style={{ width: 58 }}>
+                {GOAL_OPS.map(o => <option key={o} value={o}>{OP_GLYPH[o]}</option>)}
+              </select>
+              <input value={f.goal_value} onChange={e => setF({ ...f, goal_value: e.target.value })} placeholder="none" className="input" style={{ flex: 1 }} />
+            </div>
+          </KpiField>
+          <KpiField label="Unit" width={110}>
+            <input value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })} placeholder="count" className="input" />
+          </KpiField>
+          <KpiField label="Summarise as" width={120}>
+            <select value={f.agg} onChange={e => setF({ ...f, agg: e.target.value })} className="input">
+              <option value="sum">Total</option><option value="avg">Average</option><option value="latest">Latest</option>
+            </select>
+          </KpiField>
+          <KpiField label="Tracking from" width={160}>
+            <input type="date" value={f.start_date} onChange={e => setF({ ...f, start_date: e.target.value })} className="input" />
+          </KpiField>
+          <div className="flex gap-2 items-center ml-auto">
+            <button onClick={save} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
+            <button onClick={() => setEditing(false)} className="px-3 py-2 rounded-lg text-sm surface-2">Cancel</button>
+            <button onClick={() => { if (confirm('Remove "' + kpi.name + '" from the scorecard?')) onRemove(kpi.id); }}
+              className="px-3 py-2 rounded-lg text-sm" style={{ color: '#f43f5e' }}>Remove</button>
+          </div>
         </div>
       </td>
     </tr>
@@ -2592,7 +2630,7 @@ function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove 
 
   return (
     <tr>
-      <td className="pr-3 py-2" style={{ minWidth: 230, position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 2 }}>
+      <td className="py-1 pr-3" style={{ width: KPI_COLS.name, position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 2 }}>
         <div className="flex items-center gap-2">
           {kpi.owner_name && (
             <span className="text-[10px] font-bold rounded-full flex items-center justify-center flex-shrink-0"
@@ -2600,41 +2638,43 @@ function KpiRow({ kpi, periods, values, cadence, onSetValue, onUpdate, onRemove 
               {kpi.owner_name.split(' ').map(w => w[0]).slice(0, 2).join('')}
             </span>
           )}
-          <button onClick={() => setEditing(true)} className="text-sm text-left hover:underline" style={{ color: 'var(--text)' }}>
+          <button onClick={() => setEditing(true)} title="Edit this KPI"
+            className="text-sm text-left hover:underline truncate" style={{ color: 'var(--text)' }}>
             {kpi.name}
           </button>
         </div>
       </td>
-      <td className="px-3 text-xs whitespace-nowrap" style={{ color: 'var(--dim)' }}>
+      <td className="px-2 text-xs" style={{ width: KPI_COLS.goal, color: 'var(--dim)' }}>
         {kpi.goal_value === null || kpi.goal_value === undefined
-          ? <span className="text-faint">— set goal —</span>
-          : <span>{OP_GLYPH[kpi.goal_op]} {fmtNum(kpi.goal_value)}{kpi.unit && kpi.unit !== 'count' ? ' ' + kpi.unit : ''}</span>}
+          ? <button onClick={() => setEditing(true)} className="text-faint hover:underline">set goal</button>
+          : <span className="whitespace-nowrap">{OP_GLYPH[kpi.goal_op]} {fmtNum(kpi.goal_value)}</span>}
       </td>
-      <td className="px-3 text-xs text-right whitespace-nowrap" style={{ color: 'var(--text)' }}>
-        {latest === null ? '' : (
-          <span className="inline-flex items-center gap-1 justify-end">
+      <td className="px-2 text-xs text-right whitespace-nowrap" style={{ width: KPI_COLS.latest, color: 'var(--text)' }}>
+        {latest === null ? <span className="text-faint">—</span> : (
+          <span className="inline-flex items-center gap-1">
             <span style={{ fontWeight: 600 }}>{fmtNum(latest)}</span>
-            {trend && <span style={{ color: trend.good ? '#34d399' : '#f43f5e', fontSize: 11 }}>{trend.up ? '▲' : '▼'}</span>}
+            {trend && <span style={{ color: trend.good ? '#34d399' : '#f43f5e', fontSize: 10 }}>{trend.up ? '▲' : '▼'}</span>}
           </span>
         )}
       </td>
-      <td className="px-3 text-xs text-right whitespace-nowrap" style={{ color: 'var(--dim)' }}>
-        {agg === null ? '' : <span>{fmtNum(agg)} <span className="text-faint" style={{ fontSize: 9 }}>{kpi.agg}</span></span>}
+      <td className="px-2 text-xs text-right whitespace-nowrap" style={{ width: KPI_COLS.total, color: 'var(--dim)' }}>
+        {agg === null ? <span className="text-faint">—</span> : fmtNum(agg)}
       </td>
-      <td className="px-3 text-xs text-right whitespace-nowrap pr-5" style={{ color: 'var(--dim)' }}>
+      <td className="px-2 text-xs text-right whitespace-nowrap pr-4" style={{ width: KPI_COLS.ontarget }}>
         {scored === 0 ? <span className="text-faint">—</span>
           : <span style={{ color: hits === scored ? '#34d399' : hits === 0 ? '#f43f5e' : 'var(--dim)' }}>{hits}/{scored}</span>}
       </td>
       {periods.map(p => (
         <KpiCell key={p} kpi={kpi} period={p} value={values[kpi.id + '|' + p]}
-          onSave={(raw) => onSetValue(kpi.id, p, raw)} />
+          isCurrent={p === currentPeriod} onSave={(raw) => onSetValue(kpi.id, p, raw)} />
       ))}
     </tr>
   );
 }
 
 function KpiAddForm({ cadence, onAdd, onClose }) {
-  const [f, setF] = useState({ name: '', category: '', owner_name: '', goal_op: '>=', goal_value: '', unit: '', agg: 'sum', start_date: '' });
+  const [f, setF] = useState({ name: '', category: '', owner_name: '', goal_op: '>=',
+    goal_value: '', unit: '', agg: 'sum', start_date: '' });
   const submit = () => {
     if (!f.name.trim()) return;
     onAdd({
@@ -2653,23 +2693,39 @@ function KpiAddForm({ cadence, onAdd, onClose }) {
   return (
     <div className="surface rounded-xl p-4 mb-4">
       <p className="text-xs tracking-widest text-faint mb-3">NEW {cadence.toUpperCase()} KPI</p>
-      <div className="flex flex-wrap gap-2 items-center">
-        <input autoFocus value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="KPI name" className="input" style={{ minWidth: 230 }} />
-        <input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} placeholder="Group (e.g. SALES)" className="input" style={{ width: 170 }} />
-        <input value={f.owner_name} onChange={e => setF({ ...f, owner_name: e.target.value })} placeholder="Who" className="input" style={{ width: 120 }} />
-        <select value={f.goal_op} onChange={e => setF({ ...f, goal_op: e.target.value })} className="input" style={{ width: 70 }}>
-          {GOAL_OPS.map(o => <option key={o} value={o}>{OP_GLYPH[o]}</option>)}
-        </select>
-        <input value={f.goal_value} onChange={e => setF({ ...f, goal_value: e.target.value })} placeholder="Goal (optional)" className="input" style={{ width: 150 }} />
-        <input value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })} placeholder="Unit" className="input" style={{ width: 110 }} />
-        <select value={f.agg} onChange={e => setF({ ...f, agg: e.target.value })} className="input" style={{ width: 110 }}
-          title="How the header figure is summarised across periods">
-          <option value="sum">total</option><option value="avg">average</option><option value="latest">latest</option>
-        </select>
-        <input type="date" value={f.start_date} onChange={e => setF({ ...f, start_date: e.target.value })}
-          className="input" style={{ width: 160 }} title="Tracking starts from this date" />
-        <button onClick={submit} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Add</button>
-        <button onClick={onClose} className="px-3 py-2 rounded-lg text-sm surface-2">Cancel</button>
+      <div className="flex flex-wrap gap-3 items-end">
+        <KpiField label="KPI name" width={260}>
+          <input autoFocus value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="e.g. Qualified leads" className="input" />
+        </KpiField>
+        <KpiField label="Group" width={150}>
+          <input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} placeholder="e.g. PIPELINE" className="input" />
+        </KpiField>
+        <KpiField label="Who" width={120}>
+          <input value={f.owner_name} onChange={e => setF({ ...f, owner_name: e.target.value })} className="input" />
+        </KpiField>
+        <KpiField label="Target" width={150}>
+          <div className="flex gap-1">
+            <select value={f.goal_op} onChange={e => setF({ ...f, goal_op: e.target.value })} className="input" style={{ width: 58 }}>
+              {GOAL_OPS.map(o => <option key={o} value={o}>{OP_GLYPH[o]}</option>)}
+            </select>
+            <input value={f.goal_value} onChange={e => setF({ ...f, goal_value: e.target.value })} placeholder="none" className="input" style={{ flex: 1 }} />
+          </div>
+        </KpiField>
+        <KpiField label="Unit" width={110}>
+          <input value={f.unit} onChange={e => setF({ ...f, unit: e.target.value })} placeholder="count" className="input" />
+        </KpiField>
+        <KpiField label="Summarise as" width={120}>
+          <select value={f.agg} onChange={e => setF({ ...f, agg: e.target.value })} className="input">
+            <option value="sum">Total</option><option value="avg">Average</option><option value="latest">Latest</option>
+          </select>
+        </KpiField>
+        <KpiField label="Tracking from" width={160}>
+          <input type="date" value={f.start_date} onChange={e => setF({ ...f, start_date: e.target.value })} className="input" />
+        </KpiField>
+        <div className="flex gap-2 items-center ml-auto">
+          <button onClick={submit} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Add</button>
+          <button onClick={onClose} className="px-3 py-2 rounded-lg text-sm surface-2">Cancel</button>
+        </div>
       </div>
     </div>
   );
@@ -2706,6 +2762,8 @@ function KpisView({ coacheeId, authedEmail }) {
   const periods = allPeriods.slice(startIdx, startIdx + size);
   const atOldest = clamped >= maxOffset;
 
+  const currentPeriod = periodStart(cadence, new Date());
+
   const groups = [];
   rows.forEach(r => {
     const key = (r.category || 'GENERAL').toUpperCase();
@@ -2722,7 +2780,7 @@ function KpisView({ coacheeId, authedEmail }) {
         <button onClick={() => setAdding(a => !a)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">+ Add KPI</button>
       </div>
       <p className="text-dim mb-6 reading" style={{ fontSize: '15px' }}>
-        The numbers you keep. Click any cell to enter a value, or a KPI name to edit its goal.
+        Click any cell to enter a value. Click a KPI name to change its goal, unit or start date.
         {saving && <span className="text-faint"> · saving…</span>}
       </p>
 
@@ -2755,8 +2813,9 @@ function KpisView({ coacheeId, authedEmail }) {
           )}
           <span className="text-faint text-xs ml-auto">
             Tracking from {new Date(anchor + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}
-            {' · '}showing {periodLabel(cadence, periods[0]).join(' ')} — {periodLabel(cadence, periods[periods.length - 1]).join(' ')}
-            {allPeriods.length > size ? ' of ' + allPeriods.length : ''}
+            {allPeriods.length > size
+              ? ' · showing ' + size + ' of ' + allPeriods.length + ' periods'
+              : ' · ' + allPeriods.length + (allPeriods.length === 1 ? ' period' : ' periods')}
           </span>
         </div>
       )}
@@ -2766,18 +2825,29 @@ function KpisView({ coacheeId, authedEmail }) {
           body={'Add the numbers you want to hold yourself to. You can set a goal now or leave it blank and fill it in later.'} />
       ) : (
         <div className="surface rounded-2xl p-4" style={{ overflowX: 'auto' }}>
-          <table style={{ borderCollapse: 'separate', borderSpacing: '0 6px', width: '100%' }}>
+          <table style={{ borderCollapse: 'separate', borderSpacing: '0 6px', tableLayout: 'fixed',
+                          width: KPI_COLS.name + KPI_COLS.goal + KPI_COLS.latest + KPI_COLS.total + KPI_COLS.ontarget + periods.length * KPI_COLS.period }}>
+            <colgroup>
+              <col style={{ width: KPI_COLS.name }} />
+              <col style={{ width: KPI_COLS.goal }} />
+              <col style={{ width: KPI_COLS.latest }} />
+              <col style={{ width: KPI_COLS.total }} />
+              <col style={{ width: KPI_COLS.ontarget }} />
+              {periods.map(p => <col key={p} style={{ width: KPI_COLS.period }} />)}
+            </colgroup>
             <thead>
               <tr className="text-xs text-faint">
                 <th className="text-left pb-2" style={{ position: 'sticky', left: 0, background: 'var(--surface)', zIndex: 3 }}>KPI</th>
-                <th className="text-left pb-2 px-3">Goal</th>
-                <th className="text-right pb-2 px-3">Latest</th>
-                <th className="text-right pb-2 px-3">Total</th>
-                <th className="text-right pb-2 px-3 pr-5" title="Periods on target, of periods with a value and a goal">On target</th>
+                <th className="text-left pb-2 px-2">Goal</th>
+                <th className="text-right pb-2 px-2">Latest</th>
+                <th className="text-right pb-2 px-2" title="Summarised per KPI: total, average or latest">Total</th>
+                <th className="text-right pb-2 px-2 pr-4" title="Periods on target, of periods with both a value and a goal">On target</th>
                 {periods.map(p => {
                   const [a, b] = periodLabel(cadence, p);
+                  const isNow = p === currentPeriod;
                   return (
-                    <th key={p} className="pb-2 text-center font-normal" style={{ minWidth: 92 }}>
+                    <th key={p} className="pb-2 text-center font-normal"
+                      style={{ width: KPI_COLS.period, color: isNow ? 'var(--primary)' : undefined }}>
                       <div style={{ lineHeight: 1.25 }}>{a}</div>
                       <div style={{ lineHeight: 1.25 }}>{b}</div>
                     </th>
@@ -2795,6 +2865,7 @@ function KpisView({ coacheeId, authedEmail }) {
                   </tr>
                   {g.items.map(k => (
                     <KpiRow key={k.id} kpi={k} periods={periods} values={values} cadence={cadence}
+                      currentPeriod={currentPeriod}
                       onSetValue={setValue} onUpdate={updateKpi} onRemove={removeKpi} />
                   ))}
                 </React.Fragment>
