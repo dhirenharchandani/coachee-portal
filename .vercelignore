@@ -8,3 +8,7 @@ README.md
 .env
 .git
 node_modules
+
+# local KPI test harness — never deploy
+_kpi-harness.html
+_kpi-driver.js

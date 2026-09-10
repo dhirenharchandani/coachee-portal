@@ -6,3 +6,7 @@ node_modules/
 
 data/_preview/
 .vercel
+
+# local KPI test harness — never deploy
+_kpi-harness.html
+_kpi-driver.js
