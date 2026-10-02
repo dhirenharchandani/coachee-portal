@@ -197,6 +197,48 @@ const IS_LOCALHOST = typeof location !== 'undefined' && (location.hostname === '
 const MOCK_FOLDER = IS_LOCALHOST ? new URLSearchParams(location.search).get('mock') : null;
 
 /* =====================================================================
+   ACTIVITY TRACKING — public.activity_events (see migrate-activity.mjs)
+   Clients insert their own events; only the coach can read them.
+   Coach browsing and mock mode are never logged, and a failed insert is
+   only warned about, so tracking can never break the dashboard.
+   ===================================================================== */
+const trackCtx = { coacheeId: null, enabled: false };
+const OPEN_GAP_MS = 30 * 60 * 1000; // a return after 30 min away counts as a new visit
+
+function track(event, detail = {}) {
+  if (!sb || !trackCtx.enabled || !trackCtx.coacheeId) return;
+  sb.from('activity_events').insert({ coachee_id: trackCtx.coacheeId, event, detail })
+    .then(({ error }) => { if (error) console.warn('track failed:', error.message); });
+}
+
+function useActivityTracking(coacheeId, authedEmail, route) {
+  useEffect(() => {
+    trackCtx.coacheeId = coacheeId || null;
+    trackCtx.enabled = !!(coacheeId && authedEmail && !isCoachEmail(authedEmail) && !MOCK_FOLDER);
+    if (!trackCtx.enabled) return;
+    const key = `ig-last-seen-${coacheeId}`;
+    const touch = () => { try { localStorage.setItem(key, String(Date.now())); } catch {} };
+    const maybeOpen = () => {
+      let last = 0;
+      try { last = Number(localStorage.getItem(key) || 0); } catch {}
+      if (Date.now() - last > OPEN_GAP_MS) {
+        track('open', { device: window.matchMedia('(max-width: 767px)').matches ? 'mobile' : 'desktop' });
+      }
+      touch();
+    };
+    maybeOpen();
+    const onVis = () => (document.visibilityState === 'visible' ? maybeOpen() : touch());
+    document.addEventListener('visibilitychange', onVis);
+    return () => { touch(); document.removeEventListener('visibilitychange', onVis); };
+  }, [coacheeId, authedEmail]);
+
+  useEffect(() => {
+    const [section = 'overview', id] = route.split('/').filter(Boolean);
+    track('view', id ? { section, id } : { section });
+  }, [route, coacheeId]);
+}
+
+/* =====================================================================
    DATA LOAD — Supabase or fallback to embedded JSON
    ===================================================================== */
 function useCoacheeData(authedEmail) {
@@ -257,6 +299,7 @@ function useCoacheeData(authedEmail) {
   // Patch a profile field locally + persist
   const updateProfileField = async (key, value) => {
     if (!data) return;
+    track('profile_edit', { field: key });
     await updateData({ ...data, profile: { ...data.profile, [key]: value } });
   };
 
@@ -337,6 +380,7 @@ function useActionStatus(data, updateData) {
       const next = cur === 'pending' ? 'ongoing' : cur === 'ongoing' ? 'done' : 'pending';
       return { ...it, status: next };
     });
+    track('action_status', { id, status: newActions.find(it => it.id === id).status });
     updateData({ ...data, actionItems: newActions });
   };
   return [items, cycleStatus];
@@ -360,6 +404,7 @@ function usePriorityStatus(data, updateData) {
       const next = cur === 'pending' ? 'ongoing' : cur === 'ongoing' ? 'done' : 'pending';
       return { ...p, id: pid, status: next };
     });
+    track('priority_status', { id });
     updateData({ ...data, nextQuarter: newPriorities });
   };
   return [items, cyclePriority];
@@ -899,8 +944,13 @@ const NAV = [
   // The 'FINANCE' section is appended dynamically when data.financials.enabled is true.
 ];
 
-function buildNav(data, showKpis = false) {
+function buildNav(data, showKpis = false, isCoach = false) {
   const nav = NAV.map(sec => ({ ...sec, items: [...sec.items] }));
+  if (isCoach) {
+    nav.unshift({ section: 'COACH', items: [
+      { id: 'engagement', icon: 'users', label: 'Engagement', route: '/engagement' },
+    ]});
+  }
   if (showKpis) {
     const journey = nav.find(sec => sec.section === 'JOURNEY');
     if (journey) journey.items.push({ id: 'kpis', icon: 'trending', label: 'KPIs', route: '/kpis' });
@@ -918,8 +968,8 @@ function buildNav(data, showKpis = false) {
   return nav;
 }
 
-function Sidebar({ activeId, onNav, onSignOut, profile, badges = {}, data, showKpis = false }) {
-  const sections = useMemo(() => buildNav(data, showKpis), [data, showKpis]);
+function Sidebar({ activeId, onNav, onSignOut, profile, badges = {}, data, showKpis = false, isCoach = false }) {
+  const sections = useMemo(() => buildNav(data, showKpis, isCoach), [data, showKpis, isCoach]);
   return (
     <aside className="desktop-sidebar w-60 surface flex flex-col flex-shrink-0" style={{ borderRadius: 0, borderTop: 0, borderBottom: 0, borderLeft: 0 }}>
       <div className="p-5 border-b border-default">
@@ -2195,6 +2245,7 @@ function JournalView({ data, updateData, onNav }) {
   }, [entries, tagFilter, q]);
 
   const persist = async (newEntries) => {
+    track('journal_save', { entries: newEntries.length });
     await updateData({ ...data, journal: newEntries });
   };
 
@@ -2481,6 +2532,7 @@ function useKpis(coacheeId, authedEmail) {
     const clean = t === '' ? null : Number(t);
     setValues(prev => { const n = { ...prev }; if (clean === null) delete n[key]; else n[key] = clean; return n; });
     if (!sb) return;
+    track('kpi_value', { kpi_id: kpiId, period });
     await guard('Could not save value', async () => {
       if (clean === null) {
         const { error } = await sb.from('kpi_values').delete().eq('kpi_id', kpiId).eq('period_start', period);
@@ -2898,6 +2950,109 @@ function KpisView({ coacheeId, authedEmail }) {
 }
 
 /* =====================================================================
+   VIEW: Engagement (coach only)
+   Rows from public.coach_engagement(), which returns nothing for
+   non-coach emails. "Last seen" is the later of the last sign-in and the
+   last session refresh and the last tracked event, so clients who used the
+   dashboard before tracking existed still show their history.
+   ===================================================================== */
+const DAY_MS = 24 * 60 * 60 * 1000;
+const ENGAGEMENT_BUCKETS = [
+  { id: 'active', label: 'Active · 7 days', color: 'var(--primary)' },
+  { id: 'quiet', label: 'Quiet · 8–30 days', color: 'var(--secondary)' },
+  { id: 'dormant', label: 'Dormant · 30+ days', color: 'var(--text-dim)' },
+  { id: 'never', label: 'Never signed in', color: 'var(--text-faint)' },
+];
+
+function daysAgoLabel(ts) {
+  if (!ts) return '—';
+  const d = Math.floor((Date.now() - new Date(ts).getTime()) / DAY_MS);
+  return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d}d ago`;
+}
+
+function EngagementView({ onOpen }) {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!sb) { setError('Engagement needs the live database.'); return; }
+    sb.rpc('coach_engagement').then(({ data, error: err }) => {
+      if (err) { setError(err.message); return; }
+      const now = Date.now();
+      setRows((data || []).map(r => {
+        const seen = [r.last_sign_in, r.last_session, r.last_active].filter(Boolean).map(t => new Date(t).getTime());
+        const lastSeen = seen.length ? Math.max(...seen) : null;
+        const age = lastSeen ? (now - lastSeen) / DAY_MS : null;
+        const bucket = lastSeen === null ? 'never' : age <= 7 ? 'active' : age <= 30 ? 'quiet' : 'dormant';
+        return { ...r, lastSeen, bucket };
+      }).sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0) || (a.folder || '').localeCompare(b.folder || '')));
+    });
+  }, []);
+
+  const counts = useMemo(() => {
+    const c = { active: 0, quiet: 0, dormant: 0, never: 0 };
+    (rows || []).forEach(r => { c[r.bucket]++; });
+    return c;
+  }, [rows]);
+
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">COACH</p>
+      <h1 className="text-3xl font-bold mb-2">Client Engagement</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>
+        Who is opening their dashboard and what they use. Visits and actions are tracked from the day tracking went live; sign-ins go back further. Your own browsing is never counted.
+      </p>
+
+      {error && <EmptyState icon="chart" title="Couldn't load engagement." body={error} />}
+      {!error && !rows && <p className="text-faint text-sm">Loading…</p>}
+
+      {rows && (
+        <>
+          <div className="flex flex-wrap gap-3 mb-8">
+            {ENGAGEMENT_BUCKETS.map(b => <StatBlock key={b.id} value={counts[b.id]} label={b.label} accent={b.color} />)}
+          </div>
+
+          <div className="surface rounded-xl overflow-x-auto">
+            <table className="w-full text-sm" style={{ minWidth: 640 }}>
+              <thead>
+                <tr className="text-xs text-faint text-left">
+                  <th className="px-4 py-3 font-normal">Client</th>
+                  <th className="px-4 py-3 font-normal">Last seen</th>
+                  <th className="px-4 py-3 font-normal">Last sign-in</th>
+                  <th className="px-4 py-3 font-normal text-right" title="Visits: opened the dashboard after 30+ min away">Visits 7d</th>
+                  <th className="px-4 py-3 font-normal text-right">Visits 30d</th>
+                  <th className="px-4 py-3 font-normal text-right" title="Journal saves, action/priority updates, KPI entries, profile edits">Actions 30d</th>
+                  <th className="px-4 py-3 font-normal">Most viewed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => {
+                  const b = ENGAGEMENT_BUCKETS.find(x => x.id === r.bucket);
+                  return (
+                    <tr key={r.coachee_id} className="border-t border-default cursor-pointer hover:opacity-80" onClick={() => onOpen(r.folder)}>
+                      <td className="px-4 py-3">
+                        <span className="inline-block rounded-full mr-2 align-middle" style={{ width: 8, height: 8, background: b.color }} title={b.label}></span>
+                        {r.name || r.folder}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">{daysAgoLabel(r.lastSeen)}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-dim">{daysAgoLabel(r.last_sign_in)}</td>
+                      <td className="px-4 py-3 text-right">{r.opens_7d || '—'}</td>
+                      <td className="px-4 py-3 text-right">{r.opens_30d || '—'}</td>
+                      <td className="px-4 py-3 text-right">{r.actions_30d || '—'}</td>
+                      <td className="px-4 py-3 text-dim">{r.top_section || '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* =====================================================================
    APP SHELL
    ===================================================================== */
 function AppShell({ data, signOut, updateProfileField, updateData, coachees, coacheeId, activeFolder, setActiveFolder, authedEmail }) {
@@ -2912,6 +3067,8 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
   }, [coacheeId]);
   const showKpis = kpiCount > 0 || isCoachEmail(authedEmail);
   const [route, go] = useHashRoute();
+  useActivityTracking(coacheeId, authedEmail, route);
+  const isCoach = isCoachEmail(authedEmail);
   const [theme, toggleTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
   const [actionItems, cycleStatus] = useActionStatus(data, updateData);
@@ -2960,12 +3117,13 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
     if (seg === 'notes') return <NotesView data={data} />;
     if (seg === 'financials') return <FinancialsView data={data} />;
     if (seg === 'kpis') return <KpisView coacheeId={coacheeId} authedEmail={authedEmail} />;
-    return <OverviewView data={data} onNav={go} />;
+    if (seg === 'engagement' && isCoach) return <EngagementView onOpen={(folder) => { setActiveFolder(folder); go('/overview'); }} />;
+    return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} />;
   }, [route, data, actionItems, priorities, coacheeId, authedEmail]);
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount }} data={data} showKpis={showKpis} />
+      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount }} data={data} showKpis={showKpis} isCoach={isCoach} />
       <div className="flex-1 flex flex-col main-content min-w-0">
         <TopBar profile={data.profile} onSearch={() => setSearchOpen(true)} onToggleTheme={toggleTheme} theme={theme} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />
         <main className="flex-1 p-5 md:p-10 overflow-y-auto" key={route}>
