@@ -26,6 +26,7 @@ const COACH_DOMAINS = ['dhirenharchandani.com', 'bloomgrowthcoach.com', 'myinner
 const COACH_TZ = 'Asia/Dubai';  // times in reminders, and schedule-based reminder dates
 const EXCLUDE_FOLDERS = [];     // coachees who should never get prep reminders
 const EXCLUDE_TITLE = /^\s*(prep|prepare|retainer)\b/i; // Dhiren's own prep/admin blocks
+const NOT_CLIENTS = [/\bliya\b/i, /\bray x dhiren\b/i]; // look like sessions, aren't clients (per Dhiren)
 const SYNC_WINDOW_H = 7 * 24;   // sessions this far ahead get a prep row
 const REMIND_MIN_H = 2;         // remind for sessions starting between 2h ...
 const REMIND_MAX_H = 7 * 24;    // ... and 7 days from now (weekly run = one list for the week)
@@ -138,7 +139,7 @@ async function sync(eventsPath, dryRun) {
     let owner = [...scores.values()].sort((x, y) => rank(y) - rank(x))[0]?.c;
     if (!owner) owner = titleMatchers.find(c => title.toLowerCase().includes(c.title_match.toLowerCase()));
     if (!owner) {
-      if (external.length) unmatched.push({ title, starts_at: start, guests: external.length });
+      if (external.length && !NOT_CLIENTS.some(re => re.test(title))) unmatched.push({ title, starts_at: start, guests: external.length });
       continue;
     }
     sessions.push({
