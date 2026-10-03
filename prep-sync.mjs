@@ -1,4 +1,4 @@
-// Pre-session prep sync — run daily by the `coachee-session-prep` scheduled task.
+// Pre-session prep sync — run every Sunday morning by the `coachee-session-prep` scheduled task.
 // Reminders go out from Dhiren's own WhatsApp: each reminder carries a wa.me link
 // with the message prefilled, which he taps and sends.
 //
@@ -7,7 +7,7 @@
 //   node prep-sync.mjs mark-sent <id> ...   record that reminders went out
 //
 // <events.json> is the Google Calendar list_events result ({ events: [...] }) covering
-// at least the next 48 hours. A session = a non-cancelled, timed event with a coachee's
+// at least the next 7 days. A session = a non-cancelled, timed event with a coachee's
 // email (primary or alias) among its non-declined attendees.
 // Requires SUPABASE_ACCESS_TOKEN (read from .env next to this file if not set).
 
@@ -18,9 +18,9 @@ import { fileURLToPath } from 'node:url';
 const PROJECT_REF = 'diiazuiyxxcecjnjmirt';
 const COACH_EMAILS = ['dhirenharchandani@gmail.com', 'dhiren@myinnergame.com'];
 const EXCLUDE_FOLDERS = []; // coachees who should never get prep reminders
-const SYNC_WINDOW_H = 48;   // sessions this far ahead get a prep row
-const REMIND_MIN_H = 2;     // remind for sessions starting between 2h ...
-const REMIND_MAX_H = 36;    // ... and 36h from now (daily run = "the day before")
+const SYNC_WINDOW_H = 7 * 24; // sessions this far ahead get a prep row
+const REMIND_MIN_H = 2;        // remind for sessions starting between 2h ...
+const REMIND_MAX_H = 7 * 24;   // ... and 7 days from now (weekly run = one list for the week)
 
 const here = dirname(fileURLToPath(import.meta.url));
 let PAT = process.env.SUPABASE_ACCESS_TOKEN;

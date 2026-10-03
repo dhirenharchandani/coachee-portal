@@ -3006,7 +3006,7 @@ function PrepCard({ prep, isCoach, onNav }) {
     ? (done ? 'Prep is in for the next session' : 'No prep yet for the next session')
     : (done ? "You're prepared for our next session" : 'Prepare for our next session');
   const body = isCoach
-    ? `${when}. ${done ? 'Read their answers before the call.' : 'Reminder goes out the day before.'}`
+    ? `${when}. ${done ? 'Read their answers before the call.' : 'Not prepped yet.'}`
     : `${when}. ${done ? 'You can still add to your answers.' : 'Three questions, about two minutes.'}`;
   return (
     <button onClick={() => onNav('/prep')} className="surface rounded-xl p-5 text-left w-full hover:opacity-90 transition-opacity flex items-start gap-4"
@@ -3060,7 +3060,7 @@ function PrepView({ prep, isCoach }) {
         {isCoach ? 'What they want to bring to the next session.' : 'Two minutes now makes the hour count. Dhiren reads this before you meet.'}
       </p>
 
-      {!next && <EmptyState icon="clipboard" title="Nothing to prepare right now." body="When your next session is booked, three short questions will appear here the day before." />}
+      {!next && <EmptyState icon="clipboard" title="Nothing to prepare right now." body="When your next session is booked, three short questions will appear here ahead of it." />}
 
       {next && isCoach && (
         <div className="surface rounded-2xl p-5 md:p-6 mb-10">
@@ -3132,7 +3132,7 @@ function daysAgoLabel(ts) {
 // click-to-chat links: the message is prefilled, the coach taps Send.
 // Keep this wording in sync with prepMessage() in prep-sync.mjs.
 const PREP_LINK = 'https://dashboard.myinnergame.com/#/prep';
-const REMIND_WINDOW_MS = 36 * 60 * 60 * 1000;
+const REMIND_WINDOW_MS = 7 * DAY_MS; // matches the weekly prep-sync run
 
 function sessionWhenPhrase(ts) {
   const d = new Date(ts);
@@ -3201,7 +3201,7 @@ function PrepReminders({ rows, onEditNumber }) {
   if (!due.length) return null;
   return (
     <div className="mb-8">
-      <SectionHeading sub="Sessions in the next 36 hours without prep yet. Tap to open WhatsApp with the message written; you press Send.">Prep reminders</SectionHeading>
+      <SectionHeading sub="Sessions in the next 7 days without prep yet. Tap to open WhatsApp with the message written; you press Send.">Prep reminders</SectionHeading>
       <div className="space-y-2">
         {due.map(r => (
           <div key={r.coachee_id} className="surface rounded-xl px-4 py-3 flex items-center gap-3 flex-wrap">
