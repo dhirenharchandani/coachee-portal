@@ -928,6 +928,7 @@ function LoginScreen({ sendMagicLink, verifyEmailOtp, signInWithProvider }) {
 const NAV = [
   { section: 'WORKSPACE', items: [
     { id: 'overview', icon: 'home', label: 'Overview', route: '/overview' },
+    { id: 'prep', icon: 'clipboard', label: 'Session Prep', route: '/prep' },
     { id: 'actions', icon: 'check', label: 'Action Items', route: '/actions' },
     { id: 'journal', icon: 'pencil', label: 'Journal', route: '/journal' },
     { id: 'messages', icon: 'chat', label: 'Messages', route: '/messages' },
@@ -1166,7 +1167,7 @@ function EditableYearWord({ value, onSave }) {
   );
 }
 
-function OverviewView({ data, onNav, actionItems, updateProfileField }) {
+function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCoach }) {
   const lastSession = useMemo(() => [...data.sessions].reverse().find(s => s.summaryMd && !s.summaryMd.startsWith('_No recap')), [data]);
   // Dual-company support: when data.companies is set, each company has its own engagement / evolutionArc / scorecard / nextQuarter.
   // Otherwise fall back to the legacy top-level fields.
@@ -1184,6 +1185,8 @@ function OverviewView({ data, onNav, actionItems, updateProfileField }) {
         <h1 className="text-3xl md:text-4xl font-bold mb-3">Welcome back, {data.profile.preferredName}.</h1>
         <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>The theme of the year is <EditableYearWord value={data.profile.yearWord} onSave={v => updateProfileField && updateProfileField('yearWord', v)} />. Make it visible.</p>
       </div>
+
+      {prep && <PrepCard prep={prep} isCoach={isCoach} onNav={onNav} />}
 
       {/* Hero CTAs */}
       <HeroCTAs onNav={onNav} data={data} actionItems={actionItems} />
@@ -2950,6 +2953,161 @@ function KpisView({ coacheeId, authedEmail }) {
 }
 
 /* =====================================================================
+   VIEW: Session Prep
+   One row per upcoming session in public.session_preps, created by
+   prep-sync.mjs from the coach's calendar. Clients fill in the three
+   answers; the coach reads them (RLS blocks coach edits).
+   ===================================================================== */
+const PREP_QUESTIONS = [
+  { key: 'moved', label: "What's moved since we last spoke?", hint: 'Wins, progress, anything that shifted.' },
+  { key: 'stuck', label: "What's stuck?", hint: "Where you're struggling, or the pattern that keeps showing up." },
+  { key: 'want', label: 'What do you most want from this session?', hint: 'The one thing you want to walk out with.' },
+];
+const PREP_OPEN_MS = 2 * 60 * 60 * 1000; // a session stays "next" until 2h after it starts
+
+function fmtSessionDate(ts) {
+  return new Date(ts).toLocaleString(undefined, { weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function usePreps(coacheeId) {
+  const [preps, setPreps] = useState([]);
+  const load = useCallback(async () => {
+    if (!sb || !coacheeId) { setPreps([]); return; }
+    const { data } = await sb.from('session_preps')
+      .select('id, starts_at, title, moved, stuck, want, submitted_at')
+      .eq('coachee_id', coacheeId).order('starts_at', { ascending: false }).limit(24);
+    setPreps(data || []);
+  }, [coacheeId]);
+  useEffect(() => { load(); }, [load]);
+
+  const next = useMemo(() => {
+    const cutoff = Date.now() - PREP_OPEN_MS;
+    return [...preps].reverse().find(p => new Date(p.starts_at).getTime() > cutoff) || null;
+  }, [preps]);
+
+  const save = async (id, answers) => {
+    const { data, error } = await sb.from('session_preps')
+      .update({ ...answers, submitted_at: new Date().toISOString() }).eq('id', id).select('id');
+    if (error) return error.message;
+    if (!data || data.length === 0) return 'Not saved — please refresh and try again.';
+    track('prep_submit', { id });
+    await load();
+    return null;
+  };
+  return { preps, next, save };
+}
+
+function PrepCard({ prep, isCoach, onNav }) {
+  const { next } = prep;
+  if (!next) return null;
+  const when = fmtSessionDate(next.starts_at);
+  const done = !!next.submitted_at;
+  const title = isCoach
+    ? (done ? 'Prep is in for the next session' : 'No prep yet for the next session')
+    : (done ? "You're prepared for our next session" : 'Prepare for our next session');
+  const body = isCoach
+    ? `${when}. ${done ? 'Read their answers before the call.' : 'Reminder goes out the day before.'}`
+    : `${when}. ${done ? 'You can still add to your answers.' : 'Three questions, about two minutes.'}`;
+  return (
+    <button onClick={() => onNav('/prep')} className="surface rounded-xl p-5 text-left w-full hover:opacity-90 transition-opacity flex items-start gap-4"
+      style={{ borderLeft: `3px solid ${done ? 'var(--primary)' : 'var(--secondary)'}` }}>
+      <div className={done ? 'text-primary' : 'text-secondary'}><Icon name={done ? 'check' : 'clipboard'} size={22} strokeWidth={1.5} /></div>
+      <div className="flex-1">
+        <h3 className="font-semibold mb-1">{title}</h3>
+        <p className="text-faint text-sm reading" style={{ fontSize: '13px' }}>{body}</p>
+      </div>
+      <span className="text-primary text-sm font-medium whitespace-nowrap">{isCoach ? 'Read' : done ? 'Edit' : 'Start'} →</span>
+    </button>
+  );
+}
+
+function PrepAnswers({ p }) {
+  return (
+    <div className="space-y-4">
+      {PREP_QUESTIONS.map(q => (
+        <div key={q.key}>
+          <p className="text-faint text-xs mb-1">{q.label}</p>
+          <p className="reading whitespace-pre-wrap" style={{ fontSize: '15px' }}>{p[q.key] || <span className="text-faint">—</span>}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PrepView({ prep, isCoach }) {
+  const { preps, next, save } = prep;
+  const [answers, setAnswers] = useState({ moved: '', stuck: '', want: '' });
+  const [status, setStatus] = useState(null); // null | 'saving' | 'saved' | error string
+  useEffect(() => {
+    setAnswers({ moved: next?.moved || '', stuck: next?.stuck || '', want: next?.want || '' });
+    setStatus(null);
+  }, [next?.id]);
+
+  const canSubmit = PREP_QUESTIONS.some(q => answers[q.key].trim()) && status !== 'saving';
+  const submit = async () => {
+    setStatus('saving');
+    const clean = Object.fromEntries(PREP_QUESTIONS.map(q => [q.key, answers[q.key].trim() || null]));
+    const err = await save(next.id, clean);
+    setStatus(err || 'saved');
+  };
+  const past = preps.filter(p => p.submitted_at && p.id !== next?.id);
+
+  return (
+    <div className="fade-in">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">SESSION PREP</p>
+      <h1 className="text-3xl font-bold mb-2">{next ? `Before ${fmtSessionDate(next.starts_at)}` : 'Session Prep'}</h1>
+      <p className="text-dim mb-8 reading" style={{ fontSize: '15px' }}>
+        {isCoach ? 'What they want to bring to the next session.' : 'Two minutes now makes the hour count. Dhiren reads this before you meet.'}
+      </p>
+
+      {!next && <EmptyState icon="clipboard" title="Nothing to prepare right now." body="When your next session is booked, three short questions will appear here the day before." />}
+
+      {next && isCoach && (
+        <div className="surface rounded-2xl p-5 md:p-6 mb-10">
+          {next.submitted_at ? <PrepAnswers p={next} /> : <p className="text-faint text-sm">Not submitted yet.</p>}
+        </div>
+      )}
+
+      {next && !isCoach && (
+        <div className="surface rounded-2xl p-5 md:p-6 mb-10 space-y-6">
+          {PREP_QUESTIONS.map(q => (
+            <div key={q.key}>
+              <label className="font-semibold block mb-1" htmlFor={`prep-${q.key}`}>{q.label}</label>
+              <p className="text-faint text-sm mb-2">{q.hint}</p>
+              <textarea id={`prep-${q.key}`} value={answers[q.key]} rows={3} maxLength={4000}
+                onChange={e => { setAnswers({ ...answers, [q.key]: e.target.value }); if (status === 'saved') setStatus(null); }}
+                className="w-full surface-2 rounded-lg p-3 resize-y outline-none reading"
+                style={{ fontSize: '16px', lineHeight: 1.6, color: 'var(--text)' }} />
+            </div>
+          ))}
+          <div className="flex items-center justify-end gap-3">
+            {status === 'saved' && <span className="text-primary text-sm">Sent to Dhiren ✓</span>}
+            {status && !['saving', 'saved'].includes(status) && <span className="text-sm" style={{ color: 'var(--secondary)' }}>{status}</span>}
+            <button onClick={submit} disabled={!canSubmit} className="btn-primary px-5 py-2 rounded-lg text-sm font-semibold disabled:opacity-50">
+              {status === 'saving' ? 'Saving…' : next.submitted_at ? 'Update' : 'Send to Dhiren'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {past.length > 0 && (
+        <>
+          <SectionHeading sub={isCoach ? 'Their earlier prep notes.' : 'What you brought to earlier sessions.'}>Past prep</SectionHeading>
+          <div className="space-y-4">
+            {past.map(p => (
+              <div key={p.id} className="surface rounded-2xl p-5 md:p-6">
+                <p className="text-faint text-xs tracking-[0.18em] mb-4 uppercase">{fmtSessionDate(p.starts_at)}</p>
+                <PrepAnswers p={p} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* =====================================================================
    VIEW: Engagement (coach only)
    Rows from public.coach_engagement(), which returns nothing for
    non-coach emails. "Last seen" is the later of the last sign-in and the
@@ -3013,7 +3171,7 @@ function EngagementView({ onOpen }) {
           </div>
 
           <div className="surface rounded-xl overflow-x-auto">
-            <table className="w-full text-sm" style={{ minWidth: 640 }}>
+            <table className="w-full text-sm" style={{ minWidth: 860 }}>
               <thead>
                 <tr className="text-xs text-faint text-left">
                   <th className="px-4 py-3 font-normal">Client</th>
@@ -3023,6 +3181,8 @@ function EngagementView({ onOpen }) {
                   <th className="px-4 py-3 font-normal text-right">Visits 30d</th>
                   <th className="px-4 py-3 font-normal text-right" title="Journal saves, action/priority updates, KPI entries, profile edits">Actions 30d</th>
                   <th className="px-4 py-3 font-normal">Most viewed</th>
+                  <th className="px-4 py-3 font-normal" title="Next calendar session, and whether they've sent their prep">Next session</th>
+                  <th className="px-4 py-3 font-normal text-right" title="Sessions in the last 90 days they prepared for">Prepped 90d</th>
                 </tr>
               </thead>
               <tbody>
@@ -3040,6 +3200,13 @@ function EngagementView({ onOpen }) {
                       <td className="px-4 py-3 text-right">{r.opens_30d || '—'}</td>
                       <td className="px-4 py-3 text-right">{r.actions_30d || '—'}</td>
                       <td className="px-4 py-3 text-dim">{r.top_section || '—'}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {r.next_session_at
+                          ? <>{new Date(r.next_session_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}{' '}
+                              <span style={{ color: r.next_prep_done ? 'var(--primary)' : 'var(--text-faint)' }}>{r.next_prep_done ? '· prepped' : '· not yet'}</span></>
+                          : <span className="text-dim">—</span>}
+                      </td>
+                      <td className="px-4 py-3 text-right">{r.preps_total_90d ? `${r.preps_done_90d}/${r.preps_total_90d}` : '—'}</td>
                     </tr>
                   );
                 })}
@@ -3069,6 +3236,14 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
   const [route, go] = useHashRoute();
   useActivityTracking(coacheeId, authedEmail, route);
   const isCoach = isCoachEmail(authedEmail);
+  const prep = usePreps(coacheeId);
+  // Magic-link sign-in drops the URL hash, so a reminder-email link to #/prep
+  // is remembered before login (see App) and resumed here.
+  useEffect(() => {
+    let target = null;
+    try { target = localStorage.getItem('ig-after-login'); localStorage.removeItem('ig-after-login'); } catch {}
+    if (target) go(target);
+  }, []);
   const [theme, toggleTheme] = useTheme();
   const [searchOpen, setSearchOpen] = useState(false);
   const [actionItems, cycleStatus] = useActionStatus(data, updateData);
@@ -3103,7 +3278,8 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
   const view = useMemo(() => {
     const parts = route.split('/').filter(Boolean);
     const seg = parts[0] || 'overview';
-    if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} />;
+    if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} />;
+    if (seg === 'prep') return <PrepView prep={prep} isCoach={isCoach} />;
     if (seg === 'sessions') return <SessionsView data={data} onNav={go} route={route} unviewedIds={unviewedIds} authedEmail={authedEmail} />;
     if (seg === 'session' && parts[1]) return <SessionDetailView data={data} sessionId={parts[1]} onNav={go} actionItems={actionItems} cycleStatus={cycleStatus} markViewed={markViewed} authedEmail={authedEmail} activeFolder={activeFolder} />;
     if (seg === 'actions') return <ActionItemsView data={data} actionItems={actionItems} cycleStatus={cycleStatus} />;
@@ -3118,8 +3294,8 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
     if (seg === 'financials') return <FinancialsView data={data} />;
     if (seg === 'kpis') return <KpisView coacheeId={coacheeId} authedEmail={authedEmail} />;
     if (seg === 'engagement' && isCoach) return <EngagementView onOpen={(folder) => { setActiveFolder(folder); go('/overview'); }} />;
-    return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} />;
-  }, [route, data, actionItems, priorities, coacheeId, authedEmail]);
+    return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} />;
+  }, [route, data, actionItems, priorities, coacheeId, authedEmail, prep]);
 
   return (
     <div className="flex min-h-screen">
@@ -3152,7 +3328,12 @@ function App() {
     </div>
   );
 
-  if (!session) return <LoginScreen sendMagicLink={sendMagicLink} verifyEmailOtp={verifyEmailOtp} signInWithProvider={signInWithProvider} />;
+  if (!session) {
+    if (window.location.hash.startsWith('#/prep')) {
+      try { localStorage.setItem('ig-after-login', '/prep'); } catch {}
+    }
+    return <LoginScreen sendMagicLink={sendMagicLink} verifyEmailOtp={verifyEmailOtp} signInWithProvider={signInWithProvider} />;
+  }
 
   if (error === 'NO_DASHBOARD') return (
     <div className="login-bg min-h-screen flex flex-col items-center justify-center p-6">
