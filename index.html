@@ -2975,7 +2975,8 @@ function usePreps(coacheeId) {
     if (!sb || !coacheeId) { setPreps([]); return; }
     const { data } = await sb.from('session_preps')
       .select('id, starts_at, title, moved, stuck, want, submitted_at')
-      .eq('coachee_id', coacheeId).order('starts_at', { ascending: false }).limit(24);
+      .eq('coachee_id', coacheeId).eq('kind', 'individual')  // Bloom team prep happens in Bloom
+      .order('starts_at', { ascending: false }).limit(24);
     setPreps(data || []);
   }, [coacheeId]);
   useEffect(() => { load(); }, [load]);
@@ -3130,7 +3131,7 @@ function daysAgoLabel(ts) {
 
 // WhatsApp prep reminders go out from the coach's own WhatsApp via wa.me
 // click-to-chat links: the message is prefilled, the coach taps Send.
-// Keep this wording in sync with prepMessage() in prep-sync.mjs.
+// Keep this wording in sync with prepMessage() / teamPrepMessage() in prep-sync.mjs.
 const PREP_LINK = 'https://dashboard.myinnergame.com/#/prep';
 const REMIND_WINDOW_MS = 7 * DAY_MS; // matches the weekly prep-sync run
 
@@ -3149,8 +3150,22 @@ function prepMessage(firstName, startsAt) {
     "Before we meet, take two minutes with three questions: what's moved, what's stuck, and what you most want from our time.\n\n" + PREP_LINK;
 }
 
+function bloomMeetingLabel(title) {
+  if (/quarterly/i.test(title || '')) return 'Bloom quarterly session';
+  if (/bloom day/i.test(title || '')) return 'Bloom Day';
+  return 'Bloom weekly meeting';
+}
+
+function teamPrepMessage(title, startsAt) {
+  return `Team, our ${bloomMeetingLabel(title)} is ${sessionWhenPhrase(startsAt)}. ` +
+    'Before we meet, log in to your Bloom dashboard and update your scorecard, rocks, to-dos and issues, so we can spend our time on what matters.';
+}
+
+// No phone = WhatsApp's own chat picker, used to post into a team's group chat.
 function waLink(phone, text) {
-  return `https://wa.me/${phone.replace(/\D/g, '')}?text=${encodeURIComponent(text)}`;
+  return phone
+    ? `https://wa.me/${phone.replace(/\D/g, '')}?text=${encodeURIComponent(text)}`
+    : `https://wa.me/?text=${encodeURIComponent(text)}`;
 }
 
 // "+971 50-123 4567" / "00971501234567" → "+971501234567"; null if it can't be a number.
@@ -3168,12 +3183,12 @@ function WhatsAppCell({ row, onSaved }) {
     const raw = value.trim();
     const phone = raw ? normalizePhone(raw) : null;
     if (raw && !phone) { setErr('Use international format, e.g. +971501234567'); return; }
-    const { error } = phone
-      ? await sb.from('coachee_whatsapp').upsert({ coachee_id: row.coachee_id, phone, updated_at: new Date().toISOString() })
-      : await sb.from('coachee_whatsapp').delete().eq('coachee_id', row.coachee_id);
+    const { error } = await sb.from('coachee_whatsapp')
+      .upsert({ coachee_id: row.coachee_id, phone, updated_at: new Date().toISOString() });
     if (error) { setErr(error.message); return; }
     setErr(null); setEditing(false); onSaved(row.coachee_id, phone);
   };
+  if (row.channel === 'group') return <span className="text-dim" title="Reminders go to this team's WhatsApp group">Group chat</span>;
   if (!editing) {
     return (
       <button onClick={(e) => { e.stopPropagation(); setValue(row.whatsapp || ''); setEditing(true); }}
@@ -3194,27 +3209,44 @@ function WhatsAppCell({ row, onSaved }) {
 }
 
 function PrepReminders({ rows, onEditNumber }) {
-  const now = Date.now();
-  const due = rows.filter(r => r.next_session_at && !r.next_prep_done)
-    .filter(r => { const t = new Date(r.next_session_at).getTime(); return t > now && t - now <= REMIND_WINDOW_MS; })
-    .sort((a, b) => new Date(a.next_session_at) - new Date(b.next_session_at));
+  const [sessions, setSessions] = useState([]);
+  useEffect(() => {
+    if (!sb) return;
+    const now = new Date();
+    sb.from('session_preps').select('id, coachee_id, starts_at, title, kind, time_known')
+      .is('submitted_at', null)
+      .gt('starts_at', now.toISOString())
+      .lte('starts_at', new Date(now.getTime() + REMIND_WINDOW_MS).toISOString())
+      .order('starts_at')
+      .then(({ data }) => setSessions(data || []));
+  }, []);
+
+  const byId = useMemo(() => new Map(rows.map(r => [r.coachee_id, r])), [rows]);
+  const due = sessions.map(p => ({ p, r: byId.get(p.coachee_id) })).filter(x => x.r);
   if (!due.length) return null;
   return (
     <div className="mb-8">
-      <SectionHeading sub="Sessions in the next 7 days without prep yet. Tap to open WhatsApp with the message written; you press Send.">Prep reminders</SectionHeading>
+      <SectionHeading sub="Sessions in the next 7 days without prep yet. Tap to open WhatsApp with the message written; for teams, pick their group. You press Send.">Prep reminders</SectionHeading>
       <div className="space-y-2">
-        {due.map(r => (
-          <div key={r.coachee_id} className="surface rounded-xl px-4 py-3 flex items-center gap-3 flex-wrap">
-            <div className="flex-1 min-w-[180px]">
-              <div className="font-semibold">{r.name || r.folder}</div>
-              <div className="text-faint text-sm">{fmtSessionDate(r.next_session_at)}</div>
+        {due.map(({ p, r }) => {
+          const team = p.kind === 'team';
+          const when = p.time_known
+            ? fmtSessionDate(p.starts_at)
+            : new Date(p.starts_at).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }) + ' · from weekly schedule';
+          const text = team ? teamPrepMessage(p.title, p.starts_at) : prepMessage(r.preferred_name, p.starts_at);
+          return (
+            <div key={p.id} className="surface rounded-xl px-4 py-3 flex items-center gap-3 flex-wrap">
+              <div className="flex-1 min-w-[180px]">
+                <div className="font-semibold">{r.name || r.folder}{team && <span className="text-faint font-normal text-sm"> · team group</span>}</div>
+                <div className="text-faint text-sm">{when}</div>
+              </div>
+              {team || r.whatsapp
+                ? <a href={waLink(team ? null : r.whatsapp, text)} target="_blank" rel="noopener"
+                    className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Open in WhatsApp</a>
+                : <button onClick={() => onEditNumber(r.coachee_id)} className="text-primary text-sm">Add WhatsApp number ↓</button>}
             </div>
-            {r.whatsapp
-              ? <a href={waLink(r.whatsapp, prepMessage(r.preferred_name, r.next_session_at))} target="_blank" rel="noopener"
-                  className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Open in WhatsApp</a>
-              : <button onClick={() => onEditNumber(r.coachee_id)} className="text-primary text-sm">Add WhatsApp number ↓</button>}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -3303,7 +3335,7 @@ function EngagementView({ onOpen }) {
                       <td className="px-4 py-3 whitespace-nowrap">
                         {r.next_session_at
                           ? <>{new Date(r.next_session_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}{' '}
-                              <span style={{ color: r.next_prep_done ? 'var(--primary)' : 'var(--text-faint)' }}>{r.next_prep_done ? '· prepped' : '· not yet'}</span></>
+                              {r.channel !== 'group' && <span style={{ color: r.next_prep_done ? 'var(--primary)' : 'var(--text-faint)' }}>{r.next_prep_done ? '· prepped' : '· not yet'}</span>}</>
                           : <span className="text-dim">—</span>}
                       </td>
                       <td className="px-4 py-3 text-right">{r.preps_total_90d ? `${r.preps_done_90d}/${r.preps_total_90d}` : '—'}</td>
