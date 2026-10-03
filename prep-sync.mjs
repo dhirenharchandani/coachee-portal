@@ -1,4 +1,6 @@
 // Pre-session prep sync — run daily by the `coachee-session-prep` scheduled task.
+// Reminders go out from Dhiren's own WhatsApp: each reminder carries a wa.me link
+// with the message prefilled, which he taps and sends.
 //
 //   node prep-sync.mjs sync <events.json>   match calendar events to coachees, upsert
 //                                           session_preps rows, print reminders due (JSON)
@@ -39,14 +41,32 @@ async function sql(query) {
 }
 const lit = (v) => `'${String(v).replace(/'/g, "''")}'`;
 
+// Keep this wording in sync with prepMessage() in index.html.
+const PREP_LINK = 'https://dashboard.myinnergame.com/#/prep';
+function prepMessage(firstName, when) {
+  return `Hi ${firstName || 'there'}, looking forward to our session ${when}. ` +
+    "Before we meet, take two minutes with three questions: what's moved, what's stuck, and what you most want from our time.\n\n" + PREP_LINK;
+}
+
+// "today" / "tomorrow" / "on Monday 5 October", judged in the event's time zone.
+function whenPhrase(startsAt, timeZone) {
+  const day = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone });
+  const now = Date.now();
+  if (day(startsAt) === day(now)) return 'today';
+  if (day(startsAt) === day(now + 24 * 3600e3)) return 'tomorrow';
+  return 'on ' + new Date(startsAt).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone });
+}
+
 async function sync(eventsPath) {
   const raw = JSON.parse(readFileSync(eventsPath, 'utf8'));
   const events = Array.isArray(raw) ? raw : raw.events || [];
   const now = Date.now();
   const horizon = now + SYNC_WINDOW_H * 3600e3;
 
-  const coachees = await sql(`SELECT id, folder, data->'profile'->>'preferredName' AS preferred,
-    array[email] || coalesce(email_aliases, '{}') AS emails FROM public.coachees`);
+  const coachees = await sql(`SELECT c.id, c.folder, c.data->'profile'->>'name' AS name,
+    c.data->'profile'->>'preferredName' AS preferred, w.phone,
+    array[c.email] || coalesce(c.email_aliases, '{}') AS emails
+    FROM public.coachees c LEFT JOIN public.coachee_whatsapp w ON w.coachee_id = c.id`);
   const byEmail = new Map();
   for (const c of coachees) {
     if (EXCLUDE_FOLDERS.includes(c.folder)) continue;
@@ -75,10 +95,7 @@ async function sync(eventsPath) {
     sessions.push({
       event_id: ev.id, coachee_id: owner.id, folder: owner.folder, starts_at: start, title: ev.summary || '',
       time_zone: ev.start?.timeZone || raw.timeZone || 'UTC',
-      recipients: hits.filter(h => h.c.id === owner.id).map(h => ({
-        email: h.a.email,
-        firstName: (h.a.displayName || '').split(' ')[0] || owner.preferred || '',
-      })),
+      name: owner.name || owner.folder, preferred: owner.preferred || '', phone: owner.phone || null,
     });
   }
 
@@ -109,8 +126,14 @@ async function sync(eventsPath) {
   `);
   const reminders = due.map(d => {
     const s = sessions.find(x => x.event_id === d.event_id);
-    const day = new Date(s.starts_at).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: s.time_zone });
-    return { id: d.id, folder: s.folder, title: s.title, starts_at: s.starts_at, day_label: day, recipients: s.recipients };
+    const fmt = (opts) => new Date(s.starts_at).toLocaleString('en-GB', { ...opts, timeZone: s.time_zone });
+    const message = prepMessage(s.preferred, whenPhrase(s.starts_at, s.time_zone));
+    return {
+      id: d.id, folder: s.folder, name: s.name, title: s.title, starts_at: s.starts_at,
+      when_label: `${fmt({ weekday: 'short', day: 'numeric', month: 'short' })}, ${fmt({ hour: '2-digit', minute: '2-digit' })}`,
+      whatsapp: s.phone, message,
+      wa_link: s.phone ? `https://wa.me/${s.phone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}` : null,
+    };
   });
 
   console.log(JSON.stringify({
@@ -118,7 +141,7 @@ async function sync(eventsPath) {
     removed: removed.length,
     unmatched_external_events: unmatched,
     reminders,
-    prep_link: 'https://dashboard.myinnergame.com/#/prep',
+    engagement_page: 'https://dashboard.myinnergame.com/#/engagement',
   }, null, 2));
 }
 

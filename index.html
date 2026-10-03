@@ -3128,6 +3128,98 @@ function daysAgoLabel(ts) {
   return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d}d ago`;
 }
 
+// WhatsApp prep reminders go out from the coach's own WhatsApp via wa.me
+// click-to-chat links: the message is prefilled, the coach taps Send.
+// Keep this wording in sync with prepMessage() in prep-sync.mjs.
+const PREP_LINK = 'https://dashboard.myinnergame.com/#/prep';
+const REMIND_WINDOW_MS = 36 * 60 * 60 * 1000;
+
+function sessionWhenPhrase(ts) {
+  const d = new Date(ts);
+  const dayKey = (x) => x.toDateString();
+  const today = new Date();
+  const tomorrow = new Date(today.getTime() + DAY_MS);
+  if (dayKey(d) === dayKey(today)) return 'today';
+  if (dayKey(d) === dayKey(tomorrow)) return 'tomorrow';
+  return 'on ' + d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+function prepMessage(firstName, startsAt) {
+  return `Hi ${firstName || 'there'}, looking forward to our session ${sessionWhenPhrase(startsAt)}. ` +
+    "Before we meet, take two minutes with three questions: what's moved, what's stuck, and what you most want from our time.\n\n" + PREP_LINK;
+}
+
+function waLink(phone, text) {
+  return `https://wa.me/${phone.replace(/\D/g, '')}?text=${encodeURIComponent(text)}`;
+}
+
+// "+971 50-123 4567" / "00971501234567" → "+971501234567"; null if it can't be a number.
+function normalizePhone(raw) {
+  let t = String(raw || '').trim().replace(/[\s().-]/g, '');
+  if (t.startsWith('00')) t = '+' + t.slice(2);
+  return /^\+[1-9]\d{6,14}$/.test(t) ? t : null;
+}
+
+function WhatsAppCell({ row, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(row.whatsapp || '');
+  const [err, setErr] = useState(null);
+  const save = async () => {
+    const raw = value.trim();
+    const phone = raw ? normalizePhone(raw) : null;
+    if (raw && !phone) { setErr('Use international format, e.g. +971501234567'); return; }
+    const { error } = phone
+      ? await sb.from('coachee_whatsapp').upsert({ coachee_id: row.coachee_id, phone, updated_at: new Date().toISOString() })
+      : await sb.from('coachee_whatsapp').delete().eq('coachee_id', row.coachee_id);
+    if (error) { setErr(error.message); return; }
+    setErr(null); setEditing(false); onSaved(row.coachee_id, phone);
+  };
+  if (!editing) {
+    return (
+      <button onClick={(e) => { e.stopPropagation(); setValue(row.whatsapp || ''); setEditing(true); }}
+        className={row.whatsapp ? 'hover:opacity-70' : 'text-primary hover:opacity-70'}>
+        {row.whatsapp || '+ Add'}
+      </button>
+    );
+  }
+  return (
+    <div onClick={(e) => e.stopPropagation()}>
+      <input autoFocus value={value} onChange={e => setValue(e.target.value)} placeholder="+971…"
+        onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false); }}
+        className="surface-2 rounded px-2 py-1 text-sm outline-none" style={{ width: 150, color: 'var(--text)' }} />
+      <button onClick={save} className="text-primary text-sm ml-2">Save</button>
+      {err && <div className="text-xs mt-1" style={{ color: 'var(--secondary)' }}>{err}</div>}
+    </div>
+  );
+}
+
+function PrepReminders({ rows, onEditNumber }) {
+  const now = Date.now();
+  const due = rows.filter(r => r.next_session_at && !r.next_prep_done)
+    .filter(r => { const t = new Date(r.next_session_at).getTime(); return t > now && t - now <= REMIND_WINDOW_MS; })
+    .sort((a, b) => new Date(a.next_session_at) - new Date(b.next_session_at));
+  if (!due.length) return null;
+  return (
+    <div className="mb-8">
+      <SectionHeading sub="Sessions in the next 36 hours without prep yet. Tap to open WhatsApp with the message written; you press Send.">Prep reminders</SectionHeading>
+      <div className="space-y-2">
+        {due.map(r => (
+          <div key={r.coachee_id} className="surface rounded-xl px-4 py-3 flex items-center gap-3 flex-wrap">
+            <div className="flex-1 min-w-[180px]">
+              <div className="font-semibold">{r.name || r.folder}</div>
+              <div className="text-faint text-sm">{fmtSessionDate(r.next_session_at)}</div>
+            </div>
+            {r.whatsapp
+              ? <a href={waLink(r.whatsapp, prepMessage(r.preferred_name, r.next_session_at))} target="_blank" rel="noopener"
+                  className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Open in WhatsApp</a>
+              : <button onClick={() => onEditNumber(r.coachee_id)} className="text-primary text-sm">Add WhatsApp number ↓</button>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function EngagementView({ onOpen }) {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
@@ -3146,6 +3238,11 @@ function EngagementView({ onOpen }) {
       }).sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0) || (a.folder || '').localeCompare(b.folder || '')));
     });
   }, []);
+
+  const setPhone = (coacheeId, phone) =>
+    setRows(rs => rs.map(r => r.coachee_id === coacheeId ? { ...r, whatsapp: phone } : r));
+  const scrollToRow = (coacheeId) =>
+    document.getElementById(`eng-${coacheeId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
   const counts = useMemo(() => {
     const c = { active: 0, quiet: 0, dormant: 0, never: 0 };
@@ -3166,12 +3263,14 @@ function EngagementView({ onOpen }) {
 
       {rows && (
         <>
+          <PrepReminders rows={rows} onEditNumber={scrollToRow} />
+
           <div className="flex flex-wrap gap-3 mb-8">
             {ENGAGEMENT_BUCKETS.map(b => <StatBlock key={b.id} value={counts[b.id]} label={b.label} accent={b.color} />)}
           </div>
 
           <div className="surface rounded-xl overflow-x-auto">
-            <table className="w-full text-sm" style={{ minWidth: 860 }}>
+            <table className="w-full text-sm" style={{ minWidth: 1000 }}>
               <thead>
                 <tr className="text-xs text-faint text-left">
                   <th className="px-4 py-3 font-normal">Client</th>
@@ -3183,13 +3282,14 @@ function EngagementView({ onOpen }) {
                   <th className="px-4 py-3 font-normal">Most viewed</th>
                   <th className="px-4 py-3 font-normal" title="Next calendar session, and whether they've sent their prep">Next session</th>
                   <th className="px-4 py-3 font-normal text-right" title="Sessions in the last 90 days they prepared for">Prepped 90d</th>
+                  <th className="px-4 py-3 font-normal" title="Used for prep reminders. Only you can see this.">WhatsApp</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map(r => {
                   const b = ENGAGEMENT_BUCKETS.find(x => x.id === r.bucket);
                   return (
-                    <tr key={r.coachee_id} className="border-t border-default cursor-pointer hover:opacity-80" onClick={() => onOpen(r.folder)}>
+                    <tr key={r.coachee_id} id={`eng-${r.coachee_id}`} className="border-t border-default cursor-pointer hover:opacity-80" onClick={() => onOpen(r.folder)}>
                       <td className="px-4 py-3">
                         <span className="inline-block rounded-full mr-2 align-middle" style={{ width: 8, height: 8, background: b.color }} title={b.label}></span>
                         {r.name || r.folder}
@@ -3207,6 +3307,7 @@ function EngagementView({ onOpen }) {
                           : <span className="text-dim">—</span>}
                       </td>
                       <td className="px-4 py-3 text-right">{r.preps_total_90d ? `${r.preps_done_90d}/${r.preps_total_90d}` : '—'}</td>
+                      <td className="px-4 py-3 whitespace-nowrap"><WhatsAppCell row={r} onSaved={setPhone} /></td>
                     </tr>
                   );
                 })}
