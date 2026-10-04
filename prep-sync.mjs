@@ -1,5 +1,5 @@
 // Pre-session prep sync — run every Sunday morning by the `coachee-session-prep` scheduled task.
-// Reminders go out from Dhiren's own WhatsApp: each reminder carries a wa.me link
+// Reminders go out from Dhiren's own WhatsApp: each reminder carries a WhatsApp click-to-chat link
 // with the message prefilled, which he taps and sends.
 //
 //   node prep-sync.mjs sync <events.json> [--dry-run]
@@ -13,7 +13,8 @@
 // coachee's email (primary or alias) among its non-declined guests, or — when no guest
 // matches — whose title contains that coachee's `title_match` (coachee_whatsapp).
 // Bloom teams (channel 'group') get a team message for their WhatsApp group, and a
-// fallback reminder on their `weekly_day` if no meeting of theirs is on the calendar.
+// fallback reminder on their `weekly_day` if no meeting of theirs is on the calendar. In a week
+// with a team's quarterly or Bloom Day, that session replaces their weekly meeting.
 // Requires SUPABASE_ACCESS_TOKEN (read from .env next to this file if not set).
 
 import { readFileSync } from 'node:fs';
@@ -56,6 +57,7 @@ const isCoachAddress = (e) => {
 
 // Keep this wording in sync with prepMessage() / teamPrepMessage() in index.html.
 const PREP_LINK = 'https://dashboard.myinnergame.com/#/prep';
+const BLOOM_LINK = 'https://static.bloomgrowth.com';
 function prepMessage(firstName, when) {
   return `Hi ${firstName || 'there'}, looking forward to our session ${when}. ` +
     "Before we meet, take two minutes with three questions: what's moved, what's stuck, and what you most want from our time.\n\n" + PREP_LINK;
@@ -67,7 +69,7 @@ function bloomMeetingLabel(title) {
 }
 function teamPrepMessage(title, when) {
   return `Team, our ${bloomMeetingLabel(title)} is ${when}. ` +
-    'Before we meet, log in to your Bloom dashboard and update your scorecard, rocks, to-dos and issues, so we can spend our time on what matters.';
+    'Before we meet, log in to your Bloom dashboard and update your scorecard, rocks, to-dos and issues, so we can spend our time on what matters.\n\n' + BLOOM_LINK;
 }
 
 // "today" / "tomorrow" / "on Monday 5 October", judged in the event's time zone.
@@ -148,6 +150,14 @@ async function sync(eventsPath, dryRun) {
     });
   }
 
+  // A quarterly session or Bloom Day replaces that team's weekly meeting: drop the weekly.
+  const bigSession = (s) => /quarterly|bloom day/i.test(s.title);
+  for (let i = sessions.length - 1; i >= 0; i--) {
+    const s = sessions[i];
+    if (s.coachee.channel === 'group' && !bigSession(s)
+      && sessions.some(o => o.coachee.id === s.coachee.id && bigSession(o))) sessions.splice(i, 1);
+  }
+
   // Bloom teams whose weekly meeting isn't on the calendar this week: remind from their schedule.
   for (const c of coachees.filter(c => c.channel === 'group' && c.weekly_day !== null)) {
     if (sessions.some(s => s.coachee.id === c.id)) continue;
@@ -204,8 +214,9 @@ async function sync(eventsPath, dryRun) {
       when_label: s.time_known ? `${day}, ${fmt({ hour: '2-digit', minute: '2-digit' })}` : `${day} (from weekly schedule)`,
       whatsapp: team ? 'group' : c.phone || null, message,
       // A link without a number opens WhatsApp's chat picker, so Dhiren picks the team group.
-      wa_link: team ? `https://wa.me/?text=${encodeURIComponent(message)}`
-        : c.phone ? `https://wa.me/${c.phone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}` : null,
+      // api.whatsapp.com rather than wa.me: some ISPs DNS-block wa.me.
+      wa_link: team ? `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`
+        : c.phone ? `https://api.whatsapp.com/send?phone=${c.phone.replace(/\D/g, '')}&text=${encodeURIComponent(message)}` : null,
     };
   });
 

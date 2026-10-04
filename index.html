@@ -3129,10 +3129,11 @@ function daysAgoLabel(ts) {
   return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d}d ago`;
 }
 
-// WhatsApp prep reminders go out from the coach's own WhatsApp via wa.me
+// WhatsApp prep reminders go out from the coach's own WhatsApp via
 // click-to-chat links: the message is prefilled, the coach taps Send.
 // Keep this wording in sync with prepMessage() / teamPrepMessage() in prep-sync.mjs.
 const PREP_LINK = 'https://dashboard.myinnergame.com/#/prep';
+const BLOOM_LINK = 'https://static.bloomgrowth.com';
 const REMIND_WINDOW_MS = 7 * DAY_MS; // matches the weekly prep-sync run
 
 function sessionWhenPhrase(ts) {
@@ -3158,14 +3159,15 @@ function bloomMeetingLabel(title) {
 
 function teamPrepMessage(title, startsAt) {
   return `Team, our ${bloomMeetingLabel(title)} is ${sessionWhenPhrase(startsAt)}. ` +
-    'Before we meet, log in to your Bloom dashboard and update your scorecard, rocks, to-dos and issues, so we can spend our time on what matters.';
+    'Before we meet, log in to your Bloom dashboard and update your scorecard, rocks, to-dos and issues, so we can spend our time on what matters.\n\n' + BLOOM_LINK;
 }
 
 // No phone = WhatsApp's own chat picker, used to post into a team's group chat.
+// api.whatsapp.com rather than wa.me: some ISPs DNS-block wa.me.
 function waLink(phone, text) {
   return phone
-    ? `https://wa.me/${phone.replace(/\D/g, '')}?text=${encodeURIComponent(text)}`
-    : `https://wa.me/?text=${encodeURIComponent(text)}`;
+    ? `https://api.whatsapp.com/send?phone=${phone.replace(/\D/g, '')}&text=${encodeURIComponent(text)}`
+    : `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
 }
 
 // "+971 50-123 4567" / "00971501234567" → "+971501234567"; null if it can't be a number.
