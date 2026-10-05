@@ -68,8 +68,8 @@ function bloomMeetingLabel(title) {
   return 'Bloom weekly meeting';
 }
 function teamPrepMessage(title, when) {
-  return `Team, our ${bloomMeetingLabel(title)} is ${when}. ` +
-    'Before we meet, log in to your Bloom dashboard and update your scorecard, rocks, to-dos and issues, so we can spend our time on what matters.\n\n' + BLOOM_LINK;
+  return `Team, your ${bloomMeetingLabel(title)} is ${when}. ` +
+    'Before you meet, log in to your Bloom dashboard and update your headlines, KPIs, QP’s, to-dos and O&Os, so you can spend our time on what matters.\n\n' + BLOOM_LINK;
 }
 
 // "today" / "tomorrow" / "on Monday 5 October", judged in the event's time zone.
