@@ -195,6 +195,8 @@ const sb = USE_REAL_AUTH ? window.supabase.createClient(SUPABASE_URL, SUPABASE_A
 // Only active on localhost; production ignores the ?mock query param.
 const IS_LOCALHOST = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
 const MOCK_FOLDER = IS_LOCALHOST ? new URLSearchParams(location.search).get('mock') : null;
+// Localhost preview only: ?mock=<folder>&coach=1 previews coach-only screens with data/_preview/<folder>.pm.json.
+const MOCK_COACH = !!(MOCK_FOLDER && new URLSearchParams(location.search).get('coach') === '1');
 
 /* =====================================================================
    ACTIVITY TRACKING — public.activity_events (see migrate-activity.mjs)
@@ -434,7 +436,7 @@ function useAuth() {
   useEffect(() => {
     if (MOCK_FOLDER) {
       // Localhost preview — fake an authed user, bypass Supabase auth
-      setSession({ user: { email: `preview-${MOCK_FOLDER}@local` } });
+      setSession({ user: { email: MOCK_COACH ? 'preview-coach@local' : `preview-${MOCK_FOLDER}@local` } });
       setLoading(false);
       return;
     }
@@ -951,6 +953,10 @@ function buildNav(data, showKpis = false, isCoach = false) {
     nav.unshift({ section: 'COACH', items: [
       { id: 'engagement', icon: 'users', label: 'Engagement', route: '/engagement' },
     ]});
+    nav.splice(1, 0, { section: 'PERSON MODEL', items: [
+      { id: 'model-overview', icon: 'map', label: 'The Model', route: '/model/overview' },
+      { id: 'model-review', icon: 'clipboard', label: 'Review Queue', route: '/model/review' },
+    ]});
   }
   if (showKpis) {
     const journey = nav.find(sec => sec.section === 'JOURNEY');
@@ -1393,7 +1399,7 @@ function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCo
    VIEW: SESSIONS LIST + DETAIL
    ===================================================================== */
 const COACH_EMAILS = ['dhirenharchandani@gmail.com', 'dhiren@myinnergame.com'];
-const isCoachEmail = (email) => COACH_EMAILS.includes((email || '').toLowerCase().trim());
+const isCoachEmail = (email) => COACH_EMAILS.includes((email || '').toLowerCase().trim()) || (MOCK_COACH && email === 'preview-coach@local');
 
 function SessionsView({ data, onNav, route, unviewedIds = [], authedEmail }) {
   const isCoach = isCoachEmail(authedEmail);
@@ -3357,6 +3363,742 @@ function EngagementView({ onOpen }) {
 /* =====================================================================
    APP SHELL
    ===================================================================== */
+/* =====================================================================
+   PERSON MODEL — coach-only (see person-model-framework.md)
+   One list of findings (public.pm_findings); every screen is a filtered view.
+   Tables are coach-only under RLS; the nav is also hidden for non-coach logins.
+   ===================================================================== */
+const PM_DOMAINS = {
+  drives: 'Drives', values: 'Values', beliefs: 'Beliefs', identity: 'Identity',
+  cognition: 'Cognition', emotion: 'Emotion', relationships: 'Relationships', agency: 'Agency',
+};
+const PM_TYPES = {
+  characteristic: 'Characteristic', strength: 'Strength', vulnerability: 'Vulnerability',
+  self_perception_gap: 'Self-perception gap', loop: 'Loop', connection: 'Connection',
+  conflict: 'Conflict', impact_on_others: 'Impact on others',
+};
+const PM_LENS = { my_os: 'My OS', my_insights: 'My Insights', my_growth: 'My Growth' };
+const PM_RANK = { high: 0, medium: 1, low: 2 };
+const PM_CONF_RANK = { solid: 0, live: 1, thin: 2 };
+const PM_CONF_COLOR = { thin: '#fbbf24', live: '#60a5fa', solid: '#34d399' };
+const PM_IMP_COLOR = { high: '#f87171', medium: '#a78bfa', low: 'var(--text-faint)' };
+const PM_CLASS = { direct: 'Direct', self_report: 'Self-report', inference: 'Inference' };
+const PM_STEP = { trigger: 'Trigger', interpretation: 'Interpretation', response: 'Response', feedback: 'Feedback', consequence: 'Consequence' };
+const PM_CLIENT_VISIBLE = ['confirmed', 'disputed'];
+// Fields a client sees in "What changed over time?"; review mechanics stay coach-side.
+const PM_HISTORY_CLIENT_FIELDS = ['created', 'status', 'confidence', 'scope', 'exceptions', 'statement', 'client_headline'];
+// Text fields: the client sees that the wording changed, not the earlier coach-side draft.
+const PM_HISTORY_TEXT_FIELDS = { statement: 'What happens', client_headline: 'Headline', scope: 'Where it applies', exceptions: 'Exceptions' };
+
+const PM_SECTIONS = {
+  os: [
+    { id: 'drives', title: 'What Drives Me', line: 'My needs and motives, values and priorities, beliefs, and who I take myself to be',
+      test: f => f.lens === 'my_os' && f.domains.some(d => ['drives', 'values', 'beliefs', 'identity'].includes(d)) },
+    { id: 'think', title: 'How I Think & Act', line: 'How I notice, reason, decide, feel, form habits, follow through and learn',
+      test: f => f.lens === 'my_os' && f.domains.some(d => ['cognition', 'emotion', 'agency'].includes(d)) },
+    { id: 'relationships', title: 'My Relationships', line: 'How I trust, get close, use power, set boundaries, handle conflict and repair',
+      test: f => f.lens === 'my_os' && f.domains.includes('relationships') },
+    { id: 'strengths', title: 'My Strengths & Challenges', line: 'What reliably works for me, where I struggle, and when a strength becomes a liability',
+      test: f => f.type === 'strength' || f.type === 'vulnerability' },
+  ],
+  insights: [
+    { id: 'gaps', title: 'Blind Spots & Self-Perception Gaps', line: 'Where the self I describe differs from the self I show, including how others experience me',
+      test: f => f.type === 'self_perception_gap' },
+    { id: 'loops', title: 'Self-Defeating Loops', line: 'Recurring patterns that work against my own aims, and my part in them',
+      test: f => f.type === 'loop' && f.works_against_aims },
+    { id: 'connections', title: 'Hidden Connections & Conflicts', line: 'Unexpected links or tensions between my values, motives, beliefs, identity and behaviour',
+      test: f => (f.type === 'connection' || f.type === 'conflict') && f.domains.length >= 2 },
+    { id: 'impact', title: 'Relational Impact', line: 'How my behaviour shapes trust, closeness and conflict, and where intended and actual impact differ',
+      test: f => f.type === 'impact_on_others' },
+    { id: 'unrecognised', title: 'Unrecognised Strengths & Potential', line: 'Capacities and successful patterns I undervalue or overlook',
+      test: f => f.type === 'strength' && f.client_undervalues },
+  ],
+};
+
+function usePersonModel(coacheeId, enabled) {
+  const [state, setState] = useState({ status: 'idle', findings: [], evidence: [], history: [], error: null });
+  const mock = useRef(null);
+  const load = useCallback(async () => {
+    if (enabled && MOCK_COACH) {
+      if (!mock.current) {
+        const r = await fetch(`data/_preview/${MOCK_FOLDER}.pm.json?t=${Date.now()}`);
+        mock.current = r.ok ? await r.json() : { findings: [], evidence: [], history: [], transcripts: {} };
+        window.__pmMock = mock.current;
+      }
+      const m = mock.current;
+      setState({ status: 'ready', findings: [...m.findings], evidence: [...m.evidence], history: [...m.history], error: null });
+      return;
+    }
+    if (!enabled || !sb || !coacheeId) return;
+    setState(s => ({ ...s, status: s.findings.length ? 'refreshing' : 'loading' }));
+    const { data: findings, error } = await sb.from('pm_findings').select('*').eq('coachee_id', coacheeId).order('code');
+    if (error) { setState(s => ({ ...s, status: 'error', error: error.message })); return; }
+    const ids = (findings || []).map(f => f.id);
+    let evidence = [], history = [];
+    if (ids.length) {
+      const [ev, hi] = await Promise.all([
+        sb.from('pm_evidence').select('*').in('finding_id', ids),
+        sb.from('pm_finding_history').select('*').in('finding_id', ids).order('changed_at'),
+      ]);
+      if (ev.error || hi.error) { setState(s => ({ ...s, status: 'error', error: (ev.error || hi.error).message })); return; }
+      evidence = ev.data || []; history = hi.data || [];
+    }
+    setState({ status: 'ready', findings: findings || [], evidence, history, error: null });
+  }, [coacheeId, enabled]);
+  useEffect(() => { load(); }, [load]);
+
+  const update = async (id, patch, reason) => {
+    if (MOCK_COACH) {
+      const m = mock.current, f = m.findings.find(x => x.id === id);
+      for (const [k, v] of Object.entries(patch)) {
+        if (JSON.stringify(f[k]) !== JSON.stringify(v)) m.history.push({ id: m.history.length + 1000, finding_id: id, changed_at: new Date().toISOString(), actor: 'preview-coach@local', field: k, before: f[k], after: v, reason });
+      }
+      m.findings = m.findings.map(x => x.id === id ? { ...x, ...patch } : x);
+      await load(); return true;
+    }
+    const { error } = await sb.from('pm_findings').update({ ...patch, last_change_reason: reason || null }).eq('id', id);
+    if (error) { alert('Could not save: ' + error.message); return false; }
+    await load();
+    return true;
+  };
+  // Merge: the candidate's evidence moves to the surviving finding; the candidate is kept, marked merged.
+  const merge = async (fromId, intoId, reason) => {
+    const into = state.findings.find(f => f.id === intoId);
+    const from = state.findings.find(f => f.id === fromId);
+    if (MOCK_COACH) {
+      mock.current.evidence = mock.current.evidence.map(e => e.finding_id === fromId ? { ...e, finding_id: intoId } : e);
+      return update(fromId, { status: 'merged', merged_into: intoId }, reason || `Merged into ${into?.code}`);
+    }
+    const ev = await sb.from('pm_evidence').update({ finding_id: intoId }).eq('finding_id', fromId);
+    if (ev.error) { alert('Could not move evidence: ' + ev.error.message); return false; }
+    await sb.from('pm_findings').update({ last_change_reason: `Absorbed ${from?.code}: ${reason || 'merged in review'}`, episodes: (into?.episodes || 0) + (from?.episodes || 0) }).eq('id', intoId);
+    return update(fromId, { status: 'merged', merged_into: intoId }, reason || `Merged into ${into?.code}`);
+  };
+
+  const byFinding = useMemo(() => {
+    const ev = {}, hi = {};
+    state.evidence.forEach(e => { (ev[e.finding_id] = ev[e.finding_id] || []).push(e); });
+    state.history.forEach(h => { (hi[h.finding_id] = hi[h.finding_id] || []).push(h); });
+    return { ev, hi };
+  }, [state.evidence, state.history]);
+
+  return { ...state, evidenceFor: id => byFinding.ev[id] || [], historyFor: id => byFinding.hi[id] || [], update, merge, reload: load };
+}
+
+function usePmClientView() {
+  const [on, setOn] = useState(() => { try { return localStorage.getItem('ig-pm-client-view') === '1'; } catch { return false; } });
+  const set = (v) => { setOn(v); try { localStorage.setItem('ig-pm-client-view', v ? '1' : '0'); } catch {} };
+  return [on, set];
+}
+
+function pmSessionLabel(data, sessionId) {
+  const s = (data.sessions || []).find(x => x.id === sessionId);
+  if (!s) return sessionId;
+  const d = new Date(s.date + 'T12:00:00');
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function pmDate(ts) { return new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); }
+
+function PmChip({ children, color, title }) {
+  return (
+    <span title={title} className="text-[10px] font-semibold tracking-wider px-2 py-0.5 rounded-full uppercase"
+      style={{ color: color || 'var(--text-dim)', border: '1px solid ' + (color && color.startsWith('#') ? color + '66' : 'var(--border)'), background: color && color.startsWith('#') ? color + '14' : 'transparent' }}>
+      {children}
+    </span>
+  );
+}
+
+function PmHeader({ eyebrow, title, sub, clientView, setClientView, isCoach }) {
+  return (
+    <div className="mb-8">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-faint text-xs tracking-[0.2em] mb-2">{eyebrow}</p>
+          <h1 className="text-3xl font-bold mb-2">{title}</h1>
+          {sub && <p className="text-dim reading" style={{ fontSize: '15px' }}>{sub}</p>}
+        </div>
+        {isCoach && (
+          <button onClick={() => setClientView(!clientView)}
+            className={'px-3 py-1.5 rounded-lg text-sm inline-flex items-center gap-2 shrink-0 ' + (clientView ? 'btn-primary' : 'surface hover:bg-primary-soft')}>
+            <Icon name={clientView ? 'users' : 'lock'} size={15} /> {clientView ? 'Showing as client' : 'Show as client'}
+          </button>
+        )}
+      </div>
+      {clientView && (
+        <p className="text-xs text-faint mt-3">Client view: confirmed findings only. Coach-only details are hidden. Clients cannot open this page themselves.</p>
+      )}
+    </div>
+  );
+}
+
+// Shows a quote in the context of its transcript (coach-only table; the coach is driving the screen).
+function PmTranscriptContext({ evidence }) {
+  const [ctx, setCtx] = useState(null);
+  useEffect(() => {
+    let off = false;
+    const fetchT = MOCK_COACH
+      ? Promise.resolve({ data: { transcript_md: (window.__pmMock?.transcripts || {})[evidence.transcript_id] || '' } })
+      : sb.from('session_transcripts').select('transcript_md').eq('id', evidence.transcript_id).maybeSingle();
+    fetchT.then(({ data: r }) => {
+      if (off || !r) return;
+      const flat = r.transcript_md.replace(/\*/g, '').replace(/\s+/g, ' ');
+      const i = flat.indexOf(evidence.quote);
+      if (i < 0) { setCtx({ moved: true }); return; }
+      setCtx({ before: flat.slice(Math.max(0, i - 420), i), after: flat.slice(i + evidence.quote.length, i + evidence.quote.length + 420), start: i > 420 });
+    });
+    return () => { off = true; };
+  }, [evidence.id]);
+  if (!ctx) return <p className="text-faint text-xs mt-2">Loading transcript…</p>;
+  if (ctx.moved) return <p className="text-secondary text-xs mt-2">This quote no longer matches the stored transcript. The transcript was changed after the finding was saved.</p>;
+  return (
+    <p className="text-xs text-dim mt-2 reading" style={{ fontSize: '13px', lineHeight: 1.6 }}>
+      {ctx.start && '… '}{ctx.before}<mark style={{ background: 'var(--primary-soft)', color: 'var(--text)', padding: '0 2px' }}>{evidence.quote}</mark>{ctx.after} …
+    </p>
+  );
+}
+
+function PmHistory({ items, clientView, findings }) {
+  // The client's history starts when the coach confirmed it; drafting before that is review work, not change in them.
+  const confirmedAt = items.find(h => h.field === 'status' && h.after === 'confirmed')?.changed_at;
+  const shown = clientView
+    ? items.filter(h => h.field === 'created' || (confirmedAt && h.changed_at >= confirmedAt && PM_HISTORY_CLIENT_FIELDS.includes(h.field)))
+    : items;
+  if (!shown.length) return <p className="text-faint text-sm">No changes recorded yet.</p>;
+  const fmt = (v) => {
+    if (v === null || v === undefined) return '—';
+    if (typeof v === 'string') { const m = findings.find(f => f.id === v); return m ? m.code : v; }
+    return Array.isArray(v) ? v.join(', ') : JSON.stringify(v);
+  };
+  return (
+    <ol className="space-y-2">
+      {shown.map(h => (
+        <li key={h.id} className="text-sm flex gap-3">
+          <span className="text-faint text-xs shrink-0 pt-0.5" style={{ minWidth: 86 }}>{pmDate(h.changed_at)}</span>
+          <span className="text-dim">
+            {h.field === 'created' ? 'First proposed'
+              : clientView && PM_HISTORY_TEXT_FIELDS[h.field] ? <><strong className="text-[var(--text)]">{PM_HISTORY_TEXT_FIELDS[h.field]}</strong>: wording updated</>
+              : <><strong className="text-[var(--text)]">{h.field.replace(/_/g, ' ')}</strong>: {fmt(h.before)} → {fmt(h.after)}</>}
+            {h.reason && !clientView && <span className="text-faint"> · {h.reason}</span>}
+            {!clientView && <span className="text-faint"> · {h.actor}</span>}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+// Layout follows "The Read": one overview (three columns of section cards), and a reader that opens over it
+// with a breadcrumb and previous / next, so the model is read like a document rather than a database.
+const PM_COLUMNS = [
+  { id: 'os', title: 'My OS', line: 'What drives you and how you operate', icon: 'map', color: '#60a5fa' },
+  { id: 'insights', title: 'My Insights', line: 'What you may be learning about yourself', icon: 'sparkles', color: '#a78bfa' },
+  { id: 'growth', title: 'My Growth', line: 'How you could change and grow', icon: 'trending', color: '#34d399' },
+];
+const PM_GROWTH_SECTIONS = [
+  { id: 'prediction', title: 'Prediction', line: 'What I may do in an upcoming situation, under which conditions, and how sure that is' },
+  { id: 'nudges', title: 'Nudges', line: 'Short, optional prompts to prepare, interrupt an unhelpful response or reinforce a helpful one' },
+  { id: 'interventions', title: 'Optimisation / Interventions', line: 'Specific changes that fit how I operate, and how we will know they helped' },
+  { id: 'evolution', title: 'My Evolution', line: 'Meaningful changes in my behaviour and results' },
+];
+const pmSort = (a, b) => PM_RANK[a.importance] - PM_RANK[b.importance] || PM_CONF_RANK[a.confidence] - PM_CONF_RANK[b.confidence] || a.code.localeCompare(b.code);
+const pmHeadline = (f) => f.confidence === 'thin' ? (f.client_question || f.client_headline) : f.client_headline;
+
+// Pages the reader can step through, in overview order. Empty sections get a page of their own,
+// so "nothing here" is stated rather than hidden.
+// Each finding is shown in exactly one place, so the overview never repeats itself.
+// Type decides first (the My Insights kinds, then strengths and challenges); otherwise the owning
+// domain, which the pass lists first, picks the My OS section.
+function pmPlace(f) {
+  if (f.type === 'self_perception_gap') return 'insights/gaps';
+  if (f.type === 'loop' && f.works_against_aims) return 'insights/loops';
+  if ((f.type === 'connection' || f.type === 'conflict') && f.domains.length >= 2) return 'insights/connections';
+  if (f.type === 'impact_on_others') return 'insights/impact';
+  if (f.type === 'strength' && f.client_undervalues) return 'insights/unrecognised';
+  if (f.type === 'strength' || f.type === 'vulnerability') return 'os/strengths';
+  const d = f.domains[0];
+  if (d === 'relationships') return 'os/relationships';
+  if (['cognition', 'emotion', 'agency'].includes(d)) return 'os/think';
+  return 'os/drives';
+}
+const pmIn = (col, sec) => f => pmPlace(f) === `${col.id}/${sec.id}`;
+
+function pmPages(findings) {
+  const pages = [];
+  for (const col of PM_COLUMNS) {
+    const secs = col.id === 'growth' ? PM_GROWTH_SECTIONS : PM_SECTIONS[col.id];
+    for (const sec of secs) {
+      const items = col.id === 'growth' ? [] : findings.filter(pmIn(col, sec)).sort(pmSort);
+      if (!items.length) pages.push({ key: `${col.id}/${sec.id}`, col, sec, f: null });
+      items.forEach((f, i) => pages.push({ key: `${col.id}/${sec.id}/${f.id}`, col, sec, f, n: i + 1, of: items.length }));
+    }
+  }
+  return pages;
+}
+
+function PmEyebrow({ children, color }) {
+  return <p className="text-[10px] tracking-[0.2em] uppercase mb-2" style={{ color: color || 'var(--text-faint)' }}>{children}</p>;
+}
+function PmBlock({ title, children }) {
+  if (!children) return null;
+  return (
+    <section className="mb-7">
+      <PmEyebrow>{title}</PmEyebrow>
+      <div className="reading text-dim" style={{ fontSize: '16px' }}>{children}</div>
+    </section>
+  );
+}
+
+function PmCoachChips({ f }) {
+  return <>
+    <span className="text-faint text-xs font-mono">{f.code}</span>
+    <PmChip color={PM_CONF_COLOR[f.confidence]} title="Confidence">{f.confidence}</PmChip>
+    <PmChip color={PM_IMP_COLOR[f.importance]} title="Importance">{f.importance}</PmChip>
+    <PmChip>{PM_TYPES[f.type]}</PmChip>
+    {f.coach_framed && <PmChip color="#fbbf24" title="The frame came from the coach">Coach-framed</PmChip>}
+    {!PM_CLIENT_VISIBLE.includes(f.status) && <PmChip color="var(--secondary)">{f.status}</PmChip>}
+  </>;
+}
+
+// "How sure", spelled out from what the record stores (confidence, episodes, scope).
+function pmHowSure(f) {
+  const n = f.episodes || 0;
+  const seen = n <= 1 ? 'one occasion so far' : n === 2 ? 'two separate occasions' : `${n} separate occasions`;
+  return [
+    ['That it happens', `seen on ${seen}.`],
+    ['That it recurs', f.confidence === 'solid' ? 'sure: seen in more than one setting, with known exceptions.'
+      : f.confidence === 'live' ? 'reasonably sure, though another explanation still stands.'
+      : 'low. Treat this as a question to test, not a conclusion.'],
+    ['Where it applies', f.scope ? 'described above.' : 'not yet narrowed.'],
+    ['Why it happens', 'a working explanation, not yet tested.'],
+  ];
+}
+
+function PmQuote({ e, data, clientView }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-xl p-4 mb-3" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
+      <p className="reading" style={{ fontSize: '16px', lineHeight: 1.6 }}>"{e.quote}"</p>
+      <div className="flex items-center gap-2 flex-wrap mt-2">
+        <span className="text-faint text-xs">{pmSessionLabel(data, e.session_id)}</span>
+        <PmChip>{PM_CLASS[e.class] || e.class}</PmChip>
+        {!clientView && e.speaker !== 'client' && <PmChip color="#fbbf24">{e.speaker}</PmChip>}
+        {!clientView && e.episode && <span className="text-faint text-xs">· {e.episode}</span>}
+        {/* The transcript can hold material kept off the client's board, so context is coach-only. */}
+        {!clientView && <button onClick={() => setOpen(!open)} className="text-xs text-primary ml-auto">{open ? 'Hide context' : 'Open in transcript'}</button>}
+      </div>
+      {open && <PmTranscriptContext evidence={e} />}
+    </div>
+  );
+}
+
+function PmFindingBody({ f, pm, data, clientView }) {
+  const ev = pm.evidenceFor(f.id);
+  const support = ev.filter(e => !e.is_counter).sort((a, b) => a.session_id.localeCompare(b.session_id));
+  const counter = ev.filter(e => e.is_counter);
+  const sessions = new Set(support.map(e => e.session_id)).size;
+  const seq = Array.isArray(f.pattern_sequence) ? f.pattern_sequence : [];
+  const result = seq.find(s => s.step === 'consequence');
+  return (
+    <>
+      <PmBlock title="What happens">
+        <p>{f.statement}</p>
+        {seq.length > 0 && (
+          <ol className="mt-4 space-y-2" style={{ fontFamily: 'inherit' }}>
+            {seq.map((s, i) => (
+              <li key={i} className="flex gap-3 text-[15px]">
+                <span className="text-faint shrink-0" style={{ minWidth: 118 }}>{i + 1}. {PM_STEP[s.step] || s.step}</span>
+                <span className="flex-1">{s.text}</span>
+                {!clientView && <span className="text-[10px] uppercase tracking-wider shrink-0 pt-1" style={{ color: s.basis === 'observed' ? '#34d399' : s.basis === 'inferred' ? '#fbbf24' : 'var(--text-faint)' }}>{s.basis}</span>}
+              </li>
+            ))}
+          </ol>
+        )}
+      </PmBlock>
+
+      <section className="mb-7">
+        <PmEyebrow>When it happened</PmEyebrow>
+        <p className="reading text-dim mb-3" style={{ fontSize: '16px' }}>
+          Seen in {f.episodes || 0} separate situation{f.episodes === 1 ? '' : 's'}, across {sessions} session{sessions === 1 ? '' : 's'}. In your own words:
+        </p>
+        {support.map(e => <PmQuote key={e.id} e={e} data={data} clientView={clientView} />)}
+      </section>
+
+      <PmBlock title="What explains it">
+        <p>{f.mechanism || 'Not yet worked out.'}</p>
+        {f.alternative && <p className="mt-3"><span className="text-[var(--text)]">Another explanation: </span>{f.alternative}</p>}
+      </PmBlock>
+
+      <section className="mb-7">
+        <PmEyebrow>When it does not apply</PmEyebrow>
+        <div className="reading text-dim" style={{ fontSize: '16px' }}>
+          {f.scope && <p><span className="text-[var(--text)]">Where it applies: </span>{f.scope}</p>}
+          <p className="mt-2"><span className="text-[var(--text)]">Exceptions: </span>{f.exceptions || 'None known yet. A pattern with no known exceptions has usually not been tested.'}</p>
+          <p className="mt-2"><span className="text-[var(--text)]">Where it did not hold: </span>{f.counter_evidence}</p>
+        </div>
+        {counter.length > 0 && <div className="mt-3">{counter.map(e => <PmQuote key={e.id} e={e} data={data} clientView={clientView} />)}</div>}
+      </section>
+
+      {result && <PmBlock title="What resulted"><p>{result.text}</p></PmBlock>}
+
+      <section className="mb-7">
+        <PmEyebrow>How sure</PmEyebrow>
+        <ul className="reading text-dim space-y-1" style={{ fontSize: '16px' }}>
+          {pmHowSure(f).map(([k, v]) => <li key={k}><span className="text-[var(--text)]">{k}: </span>{v}</li>)}
+        </ul>
+      </section>
+
+      <section className="mb-7">
+        <PmEyebrow>What changed over time</PmEyebrow>
+        <PmHistory items={pm.historyFor(f.id)} clientView={clientView} findings={pm.findings} />
+      </section>
+
+      <PmBlock title="What could help">
+        <p>Nothing is linked to this yet. Practices and experiments are chosen together in session.</p>
+      </PmBlock>
+
+      {!clientView && (
+        <section className="rounded-xl p-4 mb-2" style={{ border: '1px dashed var(--border)' }}>
+          <PmEyebrow>Coach only</PmEyebrow>
+          <div className="text-sm text-dim space-y-1">
+            <p>{PM_LENS[f.lens]} · {PM_TYPES[f.type]} · {f.domains.map(d => PM_DOMAINS[d]).join(', ')}</p>
+            {f.client_question && <p>Shown as a question while Thin: <em>{f.client_question}</em></p>}
+            <p>{[f.client_undervalues && 'Client undervalues it', f.works_against_aims && 'Works against own aims', f.coach_framed && 'Frame came from the coach'].filter(Boolean).join(' · ') || 'No flags'}</p>
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+
+function PmEmptyBody({ col, sec, clientView, pending, onNav }) {
+  return (
+    <>
+      <PmBlock title="What we looked at"><p>{sec.line}.</p></PmBlock>
+      <PmBlock title="Result">
+        {col.id === 'growth'
+          ? <p>{clientView ? 'This part is built from findings we have looked at together. It opens once there are some.' : 'Predictions, nudges, interventions and My Evolution arrive in Slice 3, built on confirmed findings.'}</p>
+          : <p><strong className="text-[var(--text)]">Nothing here yet.</strong> {clientView ? 'We do not fill an area just to have something to show.' : 'No confirmed finding in this section.'}</p>}
+        {!clientView && pending > 0 && (
+          <button onClick={() => onNav('/model/review')} className="text-primary text-sm mt-3 block">{pending} candidate{pending === 1 ? '' : 's'} for this section waiting in the Review Queue</button>
+        )}
+      </PmBlock>
+    </>
+  );
+}
+
+// The reader: overlay panel with breadcrumb, close, and previous / next (also ← → and Esc).
+function PmReader({ crumbs, onClose, prev, next, footer, children }) {
+  const body = useRef(null);
+  useEffect(() => {
+    const k = (e) => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowRight' && next) next.go();
+      if (e.key === 'ArrowLeft' && prev) prev.go();
+    };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [onClose, prev, next]);
+  useEffect(() => { if (body.current) body.current.scrollTop = 0; }, [crumbs.join('/')]);
+  useEffect(() => { const o = document.body.style.overflow; document.body.style.overflow = 'hidden'; return () => { document.body.style.overflow = o; }; }, []);
+  return (
+    <div className="fixed inset-0 z-50 flex items-stretch md:items-center justify-center md:p-8" style={{ background: 'rgba(8,6,14,0.72)', backdropFilter: 'blur(3px)' }} onClick={onClose}>
+      <div className="w-full max-w-3xl flex flex-col md:rounded-2xl overflow-hidden" style={{ background: 'var(--surface)', border: '1px solid var(--border)', maxHeight: '100%' }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3 px-5 md:px-7 py-3.5" style={{ borderBottom: '1px solid var(--border)' }}>
+          <p className="text-xs text-faint flex-1 min-w-0 truncate">
+            {crumbs.map((c, i) => <span key={i}>{i > 0 && <span className="mx-1.5">›</span>}<span className={i === crumbs.length - 1 ? 'text-[var(--text)]' : ''}>{c}</span></span>)}
+          </p>
+          <button onClick={onClose} className="surface-2 rounded-lg px-3 py-1 text-xs">Close</button>
+        </div>
+        <div ref={body} className="flex-1 overflow-y-auto px-5 md:px-12 py-8">{children}</div>
+        {footer && <div className="px-5 md:px-7 py-3" style={{ borderTop: '1px solid var(--border)', background: 'var(--surface-2)' }}>{footer}</div>}
+        <div className="flex items-center gap-3 px-5 md:px-7 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+          {prev ? <button onClick={prev.go} className="surface-2 rounded-lg px-3 py-1.5 text-xs text-dim truncate max-w-[45%]">← {prev.label}</button> : <span />}
+          <span className="flex-1" />
+          {next && <button onClick={next.go} className="surface-2 rounded-lg px-3 py-1.5 text-xs text-dim truncate max-w-[45%]">{next.label} →</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PmFindingTitle({ f, clientView, eyebrow, color }) {
+  const asQuestion = f.confidence === 'thin';
+  return (
+    <div className="mb-8">
+      <PmEyebrow color={color}>{eyebrow}</PmEyebrow>
+      <div className="flex items-center gap-2 flex-wrap mb-3">
+        {asQuestion && <PmChip color="#fbbf24" title="Thin evidence: shown to the client as a question, not a statement">A question to test</PmChip>}
+        {f.status === 'disputed' && <PmChip color="#f87171">Under review</PmChip>}
+        {!clientView && <PmCoachChips f={f} />}
+      </div>
+      <h2 className={'text-2xl font-bold leading-snug ' + (asQuestion ? 'italic' : '')}>{pmHeadline(f)}</h2>
+    </div>
+  );
+}
+
+function PmOverview({ data, pm, onNav, isCoach }) {
+  const [clientView, setClientView] = usePmClientView();
+  const [openKey, setOpenKey] = useState(null);
+  if (pm.status === 'loading' || pm.status === 'idle') return <p className="text-faint text-sm">Loading…</p>;
+  if (pm.status === 'error') return <p className="text-secondary text-sm">Couldn't load the model: {pm.error}</p>;
+
+  const visible = pm.findings.filter(f => PM_CLIENT_VISIBLE.includes(f.status));
+  const candidates = pm.findings.filter(f => f.status === 'candidate');
+  const pages = pmPages(visible);
+  const idx = pages.findIndex(p => p.key === openKey);
+  const page = idx >= 0 ? pages[idx] : null;
+  const label = (p) => p.f ? `${p.col.title} · ${p.sec.title}${p.of > 1 ? ` (${p.n} of ${p.of})` : ''}` : `${p.col.title} · ${p.sec.title}`;
+  const sessionsSeen = new Set(pm.evidence.filter(e => visible.some(f => f.id === e.finding_id)).map(e => e.session_id)).size;
+  const name = data.profile?.preferredName || (data.profile?.name || '').split(' ')[0];
+
+  const stats = [
+    [visible.length, 'Findings'],
+    [sessionsSeen, 'Sessions drawn on'],
+    [visible.filter(f => f.confidence === 'thin').length, 'Questions for you'],
+    [visible.filter(f => f.status === 'disputed').length, 'Under review'],
+  ];
+  if (!clientView) stats.push([candidates.length, 'Waiting for review']);
+
+  return (
+    <div className="fade-in">
+      <PmHeader eyebrow={clientView ? 'YOUR MODEL' : 'PERSON MODEL'} title={clientView ? 'Your read' : `${name}'s model`}
+        sub={clientView ? 'What we have learned together so far. Open any card to read it.' : 'Confirmed findings, laid out as the client sees them. Open any card to read it.'}
+        clientView={clientView} setClientView={setClientView} isCoach={isCoach} />
+
+      <div className={'grid gap-3 mb-6 ' + (stats.length === 5 ? 'grid-cols-2 md:grid-cols-5' : 'grid-cols-2 md:grid-cols-4')}>
+        {stats.map(([v, l], i) => (
+          <div key={l} className={'surface rounded-xl px-4 py-3' + (l === 'Waiting for review' && v > 0 ? ' cursor-pointer' : '')}
+            onClick={l === 'Waiting for review' && v > 0 ? () => onNav('/model/review') : undefined}>
+            <div className="text-3xl font-light" style={{ color: l === 'Waiting for review' && v > 0 ? 'var(--secondary)' : 'var(--text)' }}>{v}</div>
+            <div className="text-[10px] tracking-[0.18em] text-faint mt-1 uppercase">{l}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        {PM_COLUMNS.map(col => {
+          const secs = col.id === 'growth' ? PM_GROWTH_SECTIONS : PM_SECTIONS[col.id];
+          const colItems = col.id === 'growth' ? [] : visible.filter(f => pmPlace(f).startsWith(col.id + '/'));
+          const qs = colItems.filter(f => f.confidence === 'thin').length;
+          return (
+            <div key={col.id} className="surface rounded-2xl p-4 flex flex-col gap-3">
+              <div className="flex items-center gap-3 px-1 pt-1">
+                <span className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ border: `1px solid ${col.color}55`, color: col.color, background: col.color + '14' }}><Icon name={col.icon} size={18} /></span>
+                <div className="min-w-0">
+                  <h2 className="text-lg font-semibold leading-tight">{col.title}</h2>
+                  <p className="text-faint text-xs">{col.line}</p>
+                </div>
+              </div>
+              <p className="text-[10px] tracking-[0.18em] uppercase px-1 pb-2" style={{ color: col.color, borderBottom: '1px solid var(--border)' }}>
+                {col.id === 'growth' ? 'Not started yet' : `${colItems.length} finding${colItems.length === 1 ? '' : 's'}${qs ? ` · ${qs} question${qs === 1 ? '' : 's'}` : ''}`}
+              </p>
+              {secs.map(sec => {
+                const items = col.id === 'growth' ? [] : visible.filter(pmIn(col, sec)).sort(pmSort);
+                const waiting = col.id === 'growth' ? 0 : candidates.filter(pmIn(col, sec)).length;
+                if (!items.length) return (
+                  <button key={sec.id} onClick={() => setOpenKey(`${col.id}/${sec.id}`)} className="text-left rounded-xl p-3.5 hover:bg-primary-soft transition" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--border)' }}>
+                    <p className="font-semibold text-sm">{sec.title}</p>
+                    <p className="text-faint text-xs mt-1 leading-relaxed">{sec.line}</p>
+                    <div className="flex gap-2 mt-2 flex-wrap">
+                      <PmChip>{col.id === 'growth' ? 'Not yet' : 'Nothing yet'}</PmChip>
+                      {!clientView && waiting > 0 && <PmChip color="#d97706">{waiting} to review</PmChip>}
+                    </div>
+                  </button>
+                );
+                return (
+                  <div key={sec.id} className="rounded-xl p-3.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${col.color}` }}>
+                    <p className="font-semibold text-sm mb-2">{sec.title}</p>
+                    <div className="space-y-1.5">
+                      {items.map(f => (
+                        <button key={f.id} onClick={() => setOpenKey(`${col.id}/${sec.id}/${f.id}`)} className="w-full text-left rounded-lg px-2.5 py-2 hover:bg-primary-soft transition" style={{ border: '1px solid var(--border)' }}>
+                          <p className={'text-sm leading-snug ' + (f.confidence === 'thin' ? 'italic text-dim' : '')}>{pmHeadline(f)}</p>
+                          <div className="flex gap-1.5 mt-1.5 flex-wrap items-center">
+                            {f.confidence === 'thin' && <PmChip color="#fbbf24">Question</PmChip>}
+                            {f.status === 'disputed' && <PmChip color="#f87171">Under review</PmChip>}
+                            {!clientView && <><span className="text-faint text-[10px] font-mono">{f.code}</span><PmChip color={PM_CONF_COLOR[f.confidence]}>{f.confidence}</PmChip></>}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                    {!clientView && waiting > 0 && <p className="text-[11px] mt-2" style={{ color: '#d97706' }}>+ {waiting} waiting for review</p>}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+
+      {page && (
+        <PmReader crumbs={[clientView ? 'Your read' : `${name}'s model`, page.col.title, page.sec.title]}
+          onClose={() => setOpenKey(null)}
+          prev={idx > 0 ? { label: label(pages[idx - 1]), go: () => setOpenKey(pages[idx - 1].key) } : null}
+          next={idx < pages.length - 1 ? { label: label(pages[idx + 1]), go: () => setOpenKey(pages[idx + 1].key) } : null}>
+          {page.f
+            ? <><PmFindingTitle f={page.f} clientView={clientView} color={page.col.color} eyebrow={`${page.col.title} · ${page.sec.title}${page.of > 1 ? ` (${page.n} of ${page.of})` : ''}`} />
+                <PmFindingBody f={page.f} pm={pm} data={data} clientView={clientView} /></>
+            : <><div className="mb-8"><PmEyebrow color={page.col.color}>{page.col.title}</PmEyebrow><h2 className="text-2xl font-bold">{page.sec.title}</h2></div>
+                <PmEmptyBody col={page.col} sec={page.sec} clientView={clientView} onNav={onNav} pending={page.col.id === 'growth' ? 0 : candidates.filter(pmIn(page.col, page.sec)).length} /></>}
+        </PmReader>
+      )}
+    </div>
+  );
+}
+
+function PmReviewActions({ f, pm, onDone }) {
+  const [mode, setMode] = useState(null); // 'reword' | 'reject' | 'merge'
+  const [draft, setDraft] = useState({ client_headline: f.client_headline, client_question: f.client_question || '', statement: f.statement, confidence: f.confidence, importance: f.importance });
+  const [reason, setReason] = useState('');
+  const [target, setTarget] = useState('');
+  const [busy, setBusy] = useState(false);
+  const targets = pm.findings.filter(x => x.id !== f.id && ['confirmed', 'disputed', 'candidate'].includes(x.status));
+  const run = async (fn, leaves) => { setBusy(true); const ok = await fn(); setBusy(false); if (ok) { setMode(null); if (leaves) onDone(); } };
+  const changed = () => {
+    const p = {};
+    for (const k of Object.keys(draft)) {
+      const v = k === 'client_question' ? (draft[k].trim() || null) : draft[k];
+      if (v !== (f[k] ?? null)) p[k] = v;
+    }
+    return p;
+  };
+
+  return (
+    <div>
+      {mode === 'reword' && (
+        <div className="mb-3 space-y-2 max-h-[40vh] overflow-y-auto pr-1">
+          <label className="block text-xs text-faint">Client headline<input className="input mt-1" value={draft.client_headline} onChange={e => setDraft({ ...draft, client_headline: e.target.value })} /></label>
+          <label className="block text-xs text-faint">As a question (shown while confidence is Thin)<input className="input mt-1" value={draft.client_question} onChange={e => setDraft({ ...draft, client_question: e.target.value })} /></label>
+          <label className="block text-xs text-faint">What happens<textarea className="input mt-1" rows={3} value={draft.statement} onChange={e => setDraft({ ...draft, statement: e.target.value })} /></label>
+          <div className="flex gap-3 flex-wrap items-end">
+            <label className="text-xs text-faint">Confidence
+              <select className="input mt-1" value={draft.confidence} onChange={e => setDraft({ ...draft, confidence: e.target.value })}>{['thin', 'live', 'solid'].map(c => <option key={c} value={c}>{c}</option>)}</select>
+            </label>
+            <label className="text-xs text-faint">Importance
+              <select className="input mt-1" value={draft.importance} onChange={e => setDraft({ ...draft, importance: e.target.value })}>{['high', 'medium', 'low'].map(c => <option key={c} value={c}>{c}</option>)}</select>
+            </label>
+            <button disabled={busy} onClick={() => run(() => pm.update(f.id, changed(), 'Reworded by coach'), false)} className="text-sm text-primary pb-2">Save wording, keep as candidate</button>
+          </div>
+        </div>
+      )}
+      {mode === 'reject' && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <input autoFocus className="input flex-1" style={{ minWidth: 220 }} placeholder="Why? (kept, so the same reading isn't proposed again)" value={reason} onChange={e => setReason(e.target.value)} />
+          <button disabled={busy || !reason.trim()} onClick={() => run(() => pm.update(f.id, { status: 'rejected', reject_reason: reason.trim() }, reason.trim()), true)}
+            className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#f87171', color: 'white', opacity: reason.trim() ? 1 : 0.5 }}>Reject</button>
+        </div>
+      )}
+      {mode === 'merge' && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <select className="input flex-1" style={{ minWidth: 220 }} value={target} onChange={e => setTarget(e.target.value)}>
+            <option value="">Merge into…</option>
+            {targets.map(t => <option key={t.id} value={t.id}>{t.code} · {t.client_headline} ({t.status})</option>)}
+          </select>
+          <button disabled={busy || !target} onClick={() => run(() => pm.merge(f.id, target, `Merged ${f.code} in review`), true)}
+            className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold" style={{ opacity: target ? 1 : 0.5 }}>Merge</button>
+          <p className="text-faint text-xs w-full">Its evidence moves to the other finding. This record is kept, marked as merged.</p>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 items-center">
+        <button disabled={busy} onClick={() => run(() => pm.update(f.id, { ...changed(), status: 'confirmed' }, mode === 'reword' ? 'Reworded and confirmed by coach' : 'Confirmed by coach'), true)}
+          className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold">{mode === 'reword' ? 'Save and confirm' : 'Confirm'}</button>
+        <button disabled={busy} onClick={() => setMode(mode === 'reword' ? null : 'reword')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'reword' ? 'btn-primary' : 'surface')}>Reword</button>
+        <button disabled={busy} onClick={() => setMode(mode === 'merge' ? null : 'merge')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'merge' ? 'btn-primary' : 'surface')}>Merge</button>
+        <button disabled={busy} onClick={() => setMode(mode === 'reject' ? null : 'reject')} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Reject</button>
+        <span className="text-faint text-xs ml-auto hidden md:inline">Confirming shows it to the client</span>
+      </div>
+    </div>
+  );
+}
+
+function PmReviewView({ data, pm, isCoach, onNav }) {
+  const [clientView, setClientView] = usePmClientView();
+  const [openId, setOpenId] = useState(null);
+  const [showClosed, setShowClosed] = useState(false);
+  const order = useRef([]);
+  if (pm.status === 'loading' || pm.status === 'idle') return <p className="text-faint text-sm">Loading…</p>;
+  if (pm.status === 'error') return <p className="text-secondary text-sm">Couldn't load the model: {pm.error}</p>;
+
+  const queue = pm.findings.filter(f => f.status === 'candidate').sort(pmSort);
+  const closed = pm.findings.filter(f => ['rejected', 'merged'].includes(f.status));
+  const confirmed = pm.findings.filter(f => f.status === 'confirmed').length;
+  const open = pm.findings.find(f => f.id === openId);
+  const qi = queue.findIndex(f => f.id === openId);
+  const openAt = (id) => { order.current = queue.map(f => f.id); setOpenId(id); };
+  // After an action the finding leaves the queue: move on to the next one in the order it was opened from.
+  const advance = () => {
+    const ids = order.current, at = ids.indexOf(openId);
+    const nextId = ids.slice(at + 1).find(id => pm.findings.find(f => f.id === id)) || null;
+    setOpenId(nextId);
+  };
+
+  if (clientView) return (
+    <div className="fade-in">
+      <PmHeader eyebrow="PERSON MODEL" title="Review Queue" clientView={clientView} setClientView={setClientView} isCoach={isCoach} />
+      <div className="surface rounded-2xl p-8 text-center"><p className="text-dim reading">The review queue is coach-only. Open the model to see the client view.</p></div>
+    </div>
+  );
+
+  return (
+    <div className="fade-in">
+      <PmHeader eyebrow="PERSON MODEL · COACH" title="Review Queue"
+        sub="Candidates Claude proposed from the transcripts, most important first. Open one to read it exactly as the client would, then confirm, reword, merge or reject."
+        clientView={clientView} setClientView={setClientView} isCoach={isCoach} />
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        {[[queue.length, 'To review', 'var(--secondary)'], [confirmed, 'Confirmed'], [closed.length, 'Rejected / merged']].map(([v, l, c]) => (
+          <div key={l} className="surface rounded-xl px-4 py-3"><div className="text-3xl font-light" style={{ color: c || 'var(--text)' }}>{v}</div><div className="text-[10px] tracking-[0.18em] text-faint mt-1 uppercase">{l}</div></div>
+        ))}
+      </div>
+
+      {queue.length === 0
+        ? <div className="surface rounded-2xl p-8 text-center"><p className="text-dim reading">Nothing waiting. Run the person-model pass in Claude Code to propose candidates.</p>
+            {confirmed > 0 && <button onClick={() => onNav('/model/overview')} className="text-primary text-sm mt-2">Open the model</button>}</div>
+        : <div className="surface rounded-2xl p-2">
+            {queue.map((f, i) => (
+              <button key={f.id} onClick={() => openAt(f.id)} className="w-full text-left rounded-xl px-4 py-3 hover:bg-primary-soft transition flex gap-4 items-start" style={i ? { borderTop: '1px solid var(--border)' } : {}}>
+                <span className="text-faint text-xs font-mono pt-1 shrink-0 w-12">{f.code}</span>
+                <div className="flex-1 min-w-0">
+                  <p className={'leading-snug ' + (f.confidence === 'thin' ? 'italic' : '')}>{pmHeadline(f)}</p>
+                  <p className="text-faint text-xs mt-1">{PM_LENS[f.lens]} · {PM_TYPES[f.type]} · {f.domains.map(d => PM_DOMAINS[d]).join(', ')}</p>
+                </div>
+                <div className="flex gap-1.5 shrink-0 pt-0.5">
+                  <PmChip color={PM_IMP_COLOR[f.importance]}>{f.importance}</PmChip>
+                  <PmChip color={PM_CONF_COLOR[f.confidence]}>{f.confidence}</PmChip>
+                </div>
+              </button>
+            ))}
+          </div>}
+
+      {closed.length > 0 && (
+        <div className="mt-8">
+          <button onClick={() => setShowClosed(!showClosed)} className="text-sm text-faint">{showClosed ? 'Hide' : 'Show'} rejected and merged ({closed.length})</button>
+          {showClosed && (
+            <div className="space-y-2 mt-3">
+              {closed.map(f => (
+                <div key={f.id} className="surface-2 rounded-lg p-3 text-sm">
+                  <span className="text-faint font-mono text-xs mr-2">{f.code}</span>
+                  <span className="text-dim">{f.client_headline}</span>
+                  <span className="text-faint"> · {f.status === 'merged' ? `merged into ${pm.findings.find(x => x.id === f.merged_into)?.code || '?'}` : `rejected: ${f.reject_reason}`}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {open && open.status === 'candidate' && (
+        <PmReader crumbs={['Review Queue', `${open.code}`, `${qi + 1} of ${queue.length}`]} onClose={() => setOpenId(null)}
+          prev={qi > 0 ? { label: `${queue[qi - 1].code}`, go: () => setOpenId(queue[qi - 1].id) } : null}
+          next={qi >= 0 && qi < queue.length - 1 ? { label: `${queue[qi + 1].code}`, go: () => setOpenId(queue[qi + 1].id) } : null}
+          footer={<PmReviewActions key={open.id} f={open} pm={pm} onDone={advance} />}>
+          <PmFindingTitle f={open} clientView={false} eyebrow={`Candidate · ${PM_LENS[open.lens]}`} color="var(--secondary)" />
+          <PmFindingBody f={open} pm={pm} data={data} clientView={false} />
+        </PmReader>
+      )}
+    </div>
+  );
+}
+
 function AppShell({ data, signOut, updateProfileField, updateData, coachees, coacheeId, activeFolder, setActiveFolder, authedEmail }) {
   const [kpiCount, setKpiCount] = useState(0);
   useEffect(() => {
@@ -3372,6 +4114,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
   useActivityTracking(coacheeId, authedEmail, route);
   const isCoach = isCoachEmail(authedEmail);
   const prep = usePreps(coacheeId);
+  const pm = usePersonModel(coacheeId, isCoach);
   // Magic-link sign-in drops the URL hash, so a reminder-email link to #/prep
   // is remembered before login (see App) and resumed here.
   useEffect(() => {
@@ -3405,6 +4148,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
     if (seg === 'resource') return 'resources';
     if (seg === 'next') return 'next';
     if (seg === 'financials') return 'financials';
+    if (seg === 'model') return route.split('/')[2] === 'review' ? 'model-review' : 'model-overview';
     if (!seg) return 'overview';
     return seg;
   }, [route]);
@@ -3428,13 +4172,15 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
     if (seg === 'notes') return <NotesView data={data} />;
     if (seg === 'financials') return <FinancialsView data={data} />;
     if (seg === 'kpis') return <KpisView coacheeId={coacheeId} authedEmail={authedEmail} />;
+    if (seg === 'model' && isCoach && parts[1] === 'review') return <PmReviewView data={data} pm={pm} isCoach={isCoach} onNav={go} />;
+    if (seg === 'model' && isCoach) return <PmOverview data={data} pm={pm} isCoach={isCoach} onNav={go} />;
     if (seg === 'engagement' && isCoach) return <EngagementView onOpen={(folder) => { setActiveFolder(folder); go('/overview'); }} />;
     return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} />;
-  }, [route, data, actionItems, priorities, coacheeId, authedEmail, prep]);
+  }, [route, data, actionItems, priorities, coacheeId, authedEmail, prep, pm]);
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount }} data={data} showKpis={showKpis} isCoach={isCoach} />
+      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount, 'model-review': isCoach ? pm.findings.filter(f => f.status === 'candidate').length : 0 }} data={data} showKpis={showKpis} isCoach={isCoach} />
       <div className="flex-1 flex flex-col main-content min-w-0">
         <TopBar profile={data.profile} onSearch={() => setSearchOpen(true)} onToggleTheme={toggleTheme} theme={theme} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />
         <main className="flex-1 p-5 md:p-10 overflow-y-auto" key={route}>
