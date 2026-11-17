@@ -3416,17 +3416,19 @@ const PM_SECTIONS = {
 };
 
 function usePersonModel(coacheeId, enabled) {
-  const [state, setState] = useState({ status: 'idle', findings: [], evidence: [], history: [], error: null });
+  const [state, setState] = useState({ status: 'idle', findings: [], evidence: [], history: [], predictions: [], interventions: [], growthHistory: [], error: null });
   const mock = useRef(null);
   const load = useCallback(async () => {
     if (enabled && MOCK_COACH) {
       if (!mock.current) {
         const r = await fetch(`data/_preview/${MOCK_FOLDER}.pm.json?t=${Date.now()}`);
         mock.current = r.ok ? await r.json() : { findings: [], evidence: [], history: [], transcripts: {} };
+        for (const k of ['predictions', 'interventions', 'growth_history']) mock.current[k] = mock.current[k] || [];
         window.__pmMock = mock.current;
       }
       const m = mock.current;
-      setState({ status: 'ready', findings: [...m.findings], evidence: [...m.evidence], history: [...m.history], error: null });
+      setState({ status: 'ready', findings: [...m.findings], evidence: [...m.evidence], history: [...m.history],
+        predictions: [...m.predictions], interventions: [...m.interventions], growthHistory: [...m.growth_history], error: null });
       return;
     }
     if (!enabled || !sb || !coacheeId) return;
@@ -3443,7 +3445,14 @@ function usePersonModel(coacheeId, enabled) {
       if (ev.error || hi.error) { setState(s => ({ ...s, status: 'error', error: (ev.error || hi.error).message })); return; }
       evidence = ev.data || []; history = hi.data || [];
     }
-    setState({ status: 'ready', findings: findings || [], evidence, history, error: null });
+    const [pr, iv, gh] = await Promise.all([
+      sb.from('pm_predictions').select('*').eq('coachee_id', coacheeId).order('code'),
+      sb.from('pm_interventions').select('*').eq('coachee_id', coacheeId).order('code'),
+      sb.from('pm_growth_history').select('*').eq('coachee_id', coacheeId).order('changed_at'),
+    ]);
+    // Growth tables may not exist yet on an older database; the rest of the model still loads.
+    setState({ status: 'ready', findings: findings || [], evidence, history,
+      predictions: pr.data || [], interventions: iv.data || [], growthHistory: gh.data || [], error: null });
   }, [coacheeId, enabled]);
   useEffect(() => { load(); }, [load]);
 
@@ -3475,14 +3484,34 @@ function usePersonModel(coacheeId, enabled) {
     return update(fromId, { status: 'merged', merged_into: intoId }, reason || `Merged into ${into?.code}`);
   };
 
+  // Predictions and interventions. The database refuses what the framework forbids (accepting on an
+  // unconfirmed finding, rewording a prediction after it was logged), so the message is shown as is.
+  const updateGrowth = async (type, id, patch, reason) => {
+    const table = type === 'prediction' ? 'pm_predictions' : 'pm_interventions';
+    if (MOCK_COACH) {
+      const m = mock.current, key = type === 'prediction' ? 'predictions' : 'interventions', it = m[key].find(x => x.id === id);
+      for (const [k, v] of Object.entries(patch)) {
+        if (JSON.stringify(it[k]) !== JSON.stringify(v)) m.growth_history.push({ id: m.growth_history.length + 5000, item_type: type, item_id: id, changed_at: new Date().toISOString(), actor: 'preview-coach@local', field: k, before: it[k], after: v, reason });
+      }
+      m[key] = m[key].map(x => x.id === id ? { ...x, ...patch, ...(patch.status === 'scored' ? { scored_at: new Date().toISOString() } : {}), ...(patch.shared_with_client ? { shared_at: new Date().toISOString() } : {}) } : x);
+      await load(); return true;
+    }
+    const { error } = await sb.from(table).update({ ...patch, last_change_reason: reason || null }).eq('id', id);
+    if (error) { alert('Could not save: ' + error.message.replace(/^pm_(predictions|interventions): /, '')); return false; }
+    await load();
+    return true;
+  };
+
   const byFinding = useMemo(() => {
-    const ev = {}, hi = {};
+    const ev = {}, hi = {}, gh = {};
     state.evidence.forEach(e => { (ev[e.finding_id] = ev[e.finding_id] || []).push(e); });
     state.history.forEach(h => { (hi[h.finding_id] = hi[h.finding_id] || []).push(h); });
-    return { ev, hi };
-  }, [state.evidence, state.history]);
+    state.growthHistory.forEach(h => { (gh[h.item_id] = gh[h.item_id] || []).push(h); });
+    return { ev, hi, gh };
+  }, [state.evidence, state.history, state.growthHistory]);
 
-  return { ...state, evidenceFor: id => byFinding.ev[id] || [], historyFor: id => byFinding.hi[id] || [], update, merge, reload: load };
+  return { ...state, evidenceFor: id => byFinding.ev[id] || [], historyFor: id => byFinding.hi[id] || [], growthHistoryFor: id => byFinding.gh[id] || [],
+    update, merge, updateGrowth, reload: load };
 }
 
 function usePmClientView() {
@@ -3622,17 +3651,295 @@ function pmPlace(f) {
 }
 const pmIn = (col, sec) => f => pmPlace(f) === `${col.id}/${sec.id}`;
 
-function pmPages(findings) {
+function pmPages(findings, growth) {
   const pages = [];
   for (const col of PM_COLUMNS) {
     const secs = col.id === 'growth' ? PM_GROWTH_SECTIONS : PM_SECTIONS[col.id];
     for (const sec of secs) {
-      const items = col.id === 'growth' ? [] : findings.filter(pmIn(col, sec)).sort(pmSort);
+      if (col.id === 'growth') {
+        if (sec.id === 'evolution') { pages.push({ key: 'growth/evolution', col, sec, evolution: growth.evolution }); continue; }
+        const items = growth[sec.id];
+        if (!items.length) pages.push({ key: `${col.id}/${sec.id}`, col, sec, f: null });
+        items.forEach((g, i) => pages.push({ key: `${col.id}/${sec.id}/${g.id}`, col, sec, g, gType: sec.id === 'prediction' ? 'prediction' : 'intervention', n: i + 1, of: items.length }));
+        continue;
+      }
+      const items = findings.filter(pmIn(col, sec)).sort(pmSort);
       if (!items.length) pages.push({ key: `${col.id}/${sec.id}`, col, sec, f: null });
       items.forEach((f, i) => pages.push({ key: `${col.id}/${sec.id}/${f.id}`, col, sec, f, n: i + 1, of: items.length }));
     }
   }
   return pages;
+}
+
+// ── Growth: predictions, nudges, interventions, My Evolution ──
+// Proposals wait in the Review Queue. Accepted items show in the Growth column. The client view shows an
+// intervention once it is active and its finding is confirmed, and a prediction only once the coach has
+// shared it (a prediction shared before the event can change the event).
+const PM_KIND = { nudge: 'Nudge', practice: 'Practice', experiment: 'Experiment' };
+const PM_OUTCOME = { hit: 'Happened as expected', miss: 'Did not happen as expected', partial: 'Partly as expected', not_testable: 'Could not tell' };
+const PM_OUTCOME_COLOR = { hit: '#34d399', miss: '#f87171', partial: '#fbbf24', not_testable: 'var(--text-faint)' };
+const PM_CONF_WORDS = { thin: 'a question to test', live: 'reasonably sure', solid: 'sure' };
+const pmLive = f => f && PM_CLIENT_VISIBLE.includes(f.status);
+const pmFindingsOf = (pm, p) => (p.finding_ids || []).map(id => pm.findings.find(f => f.id === id)).filter(Boolean);
+const pmShortDate = (d) => new Date(d + (d.length === 10 ? 'T12:00:00' : '')).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+
+function pmGrowth(pm, clientView) {
+  const preds = pm.predictions.filter(p => ['open', 'scored'].includes(p.status)
+    && (!clientView || (p.shared_with_client && pmFindingsOf(pm, p).every(pmLive))))
+    .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || a.situation_date.localeCompare(b.situation_date));
+  const ints = pm.interventions.filter(i => ['active', 'done'].includes(i.status) && pmLive(pm.findings.find(f => f.id === i.finding_id)))
+    .sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1) || a.code.localeCompare(b.code));
+  return { prediction: preds, nudges: ints.filter(i => i.kind === 'nudge'), interventions: ints.filter(i => i.kind !== 'nudge'), evolution: pmEvolution(pm) };
+}
+
+// My Evolution: changes to confirmed findings after they were confirmed, newest first.
+function pmEvolution(pm) {
+  const out = [];
+  for (const f of pm.findings.filter(f => pmLive(f) || f.status === 'closed')) {
+    const hist = pm.historyFor(f.id);
+    const confirmedAt = hist.find(h => h.field === 'status' && h.after === 'confirmed')?.changed_at;
+    if (!confirmedAt) continue;
+    for (const h of hist) {
+      if (h.changed_at <= confirmedAt) continue;
+      let text = null;
+      if (h.field === 'confidence') text = `How sure: ${PM_CONF_WORDS[h.before] || h.before} → ${PM_CONF_WORDS[h.after] || h.after}`;
+      else if (h.field === 'scope') text = 'Where it applies was updated';
+      else if (h.field === 'exceptions') text = 'A new exception was added';
+      else if (h.field === 'status' && h.after === 'closed') text = 'You have changed this. It no longer describes how you operate.';
+      if (text) out.push({ id: h.id, at: h.changed_at, f, text });
+    }
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at));
+}
+
+function PmGrowthTitle({ g, type, clientView, color, eyebrow }) {
+  return (
+    <div className="mb-8">
+      <PmEyebrow color={color}>{eyebrow}</PmEyebrow>
+      <div className="flex items-center gap-2 flex-wrap mb-3">
+        {type === 'prediction'
+          ? (g.status === 'scored' ? <PmChip color={PM_OUTCOME_COLOR[g.outcome]}>{PM_OUTCOME[g.outcome]}</PmChip> : <PmChip color="#60a5fa">For {pmShortDate(g.situation_date)}</PmChip>)
+          : <><PmChip color="#34d399">{PM_KIND[g.kind]}</PmChip>{g.status === 'done' && <PmChip>Done</PmChip>}</>}
+        {!clientView && <>
+          <span className="text-faint text-xs font-mono">{g.code}</span>
+          {!['open', 'active', 'scored', 'done'].includes(g.status) && <PmChip color="var(--secondary)">{g.status}</PmChip>}
+          {type === 'prediction' && <PmChip color={g.shared_with_client ? '#a78bfa' : 'var(--text-faint)'} title="A prediction shared before the event can change it">{g.shared_with_client ? 'Shared with client' : 'Not shared'}</PmChip>}
+        </>}
+      </div>
+      <h2 className="text-2xl font-bold leading-snug">{type === 'prediction' ? g.situation : g.opportunity}</h2>
+    </div>
+  );
+}
+
+function PmBasedOn({ findings, clientView }) {
+  if (!findings.length) return null;
+  return (
+    <PmBlock title="Based on">
+      <ul className="space-y-1">
+        {findings.map(f => <li key={f.id}>{!clientView && <span className="text-faint text-xs font-mono mr-2">{f.code}</span>}{pmHeadline(f)}{!clientView && !pmLive(f) && <span className="text-faint"> ({f.status})</span>}</li>)}
+      </ul>
+    </PmBlock>
+  );
+}
+
+function PmGrowthHistory({ items }) {
+  if (!items.length) return null;
+  return (
+    <section className="mb-7">
+      <PmEyebrow>History</PmEyebrow>
+      <ol className="space-y-1.5">
+        {items.map(h => (
+          <li key={h.id} className="text-sm flex gap-3">
+            <span className="text-faint text-xs shrink-0 pt-0.5" style={{ minWidth: 86 }}>{pmDate(h.changed_at)}</span>
+            <span className="text-dim">{h.field === 'created' ? 'Proposed' : <><strong className="text-[var(--text)]">{h.field.replace(/_/g, ' ')}</strong>: {String(h.before ?? '—')} → {String(h.after ?? '—')}</>}
+              {h.reason && <span className="text-faint"> · {h.reason}</span>}<span className="text-faint"> · {h.actor}</span></span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function PmPredictionBody({ p, pm, clientView }) {
+  return (
+    <>
+      <PmBlock title="When"><p>By {pmDate(p.situation_date + 'T12:00:00')}. Written down on {pmDate(p.created_at)}, before it happened.</p></PmBlock>
+      <PmBlock title="What we expect"><p>{p.expected}</p></PmBlock>
+      <PmBlock title="What would make it more or less likely"><p>{p.conditions}</p></PmBlock>
+      <PmBlock title="What would show it was wrong"><p>{p.wrong_if}</p></PmBlock>
+      {p.involves_others && <PmBlock title="How sure"><p>Less sure than usual: part of it depends on how someone else responds, and the model is only about you.</p></PmBlock>}
+      <PmBasedOn findings={pmFindingsOf(pm, p)} clientView={clientView} />
+      <PmBlock title="What happened">
+        {p.status === 'scored'
+          ? <><p><strong className="text-[var(--text)]">{PM_OUTCOME[p.outcome]}.</strong> {p.outcome_note}</p>
+              {!clientView && p.shared_with_client && <p className="text-faint text-sm mt-2">Shared with the client before the event, so a hit is not counted as unassisted.</p>}
+              {!clientView && p.outcome === 'miss' && <p className="text-faint text-sm mt-2">A miss should lower the finding's confidence or add an exception to its scope. Update the finding it rests on.</p>}</>
+          : <p>Not known yet.</p>}
+      </PmBlock>
+      {!clientView && <PmGrowthHistory items={pm.growthHistoryFor(p.id)} />}
+    </>
+  );
+}
+
+function PmInterventionBody({ i, pm, clientView }) {
+  const f = pm.findings.find(x => x.id === i.finding_id);
+  return (
+    <>
+      <PmBlock title="When"><p>{i.point_of_change}</p></PmBlock>
+      <PmBlock title="What to do"><p>{i.action}</p></PmBlock>
+      <PmBlock title="What should improve"><p>{i.intended_benefit}</p></PmBlock>
+      <PmBlock title="How we'll know it helped"><p>{i.how_we_know}</p></PmBlock>
+      <PmBasedOn findings={f ? [f] : []} clientView={clientView} />
+      <PmBlock title="What happened"><p>{i.result || (i.status === 'active' ? 'Under way. Nothing recorded yet.' : 'Not started.')}</p></PmBlock>
+      {!clientView && <PmGrowthHistory items={pm.growthHistoryFor(i.id)} />}
+    </>
+  );
+}
+
+function PmEvolutionBody({ entries, clientView }) {
+  return (
+    <>
+      <PmBlock title="What this shows"><p>Meaningful changes in your behaviour and results, newest first. One good week is an exception; a change is counted when the old pattern stops showing up across several occasions.</p></PmBlock>
+      <section className="mb-7">
+        <PmEyebrow>Changes</PmEyebrow>
+        {entries.length === 0
+          ? <p className="reading text-dim" style={{ fontSize: '16px' }}>{clientView ? 'Nothing yet. This fills in as what we have found together changes over time.' : 'No change to a confirmed finding since it was confirmed.'}</p>
+          : <ol className="space-y-3">
+              {entries.map(e => (
+                <li key={e.id} className="flex gap-3">
+                  <span className="text-faint text-xs shrink-0 pt-1" style={{ minWidth: 86 }}>{pmDate(e.at)}</span>
+                  <div><p className="text-[var(--text)]">{pmHeadline(e.f)}</p><p className="text-dim text-sm">{e.text}</p></div>
+                </li>
+              ))}
+            </ol>}
+      </section>
+    </>
+  );
+}
+
+// Coach actions on accepted items, shown in the reader footer (never in client view).
+function PmGrowthActions({ g, type, pm, data }) {
+  const [mode, setMode] = useState(null);
+  const [outcome, setOutcome] = useState('');
+  const [note, setNote] = useState('');
+  const [sessionId, setSessionId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const run = async (fn) => { setBusy(true); const ok = await fn(); setBusy(false); if (ok) { setMode(null); setNote(''); } };
+  const sessions = (data.sessions || []).filter(s => s.date >= (g.created_at || '').slice(0, 10)).slice(-8);
+  if (type === 'prediction') {
+    if (g.status !== 'open') return <p className="text-faint text-xs">Scored{g.scored_at ? ` on ${pmDate(g.scored_at)}` : ''}. A scored prediction stays as it is.</p>;
+    return (
+      <div>
+        {mode === 'score' && (
+          <div className="mb-3 space-y-2">
+            <div className="flex gap-2 flex-wrap">
+              {Object.entries(PM_OUTCOME).map(([k, v]) => <button key={k} onClick={() => setOutcome(k)} className={'px-3 py-1.5 rounded-lg text-sm ' + (outcome === k ? 'btn-primary' : 'surface')}>{v}</button>)}
+            </div>
+            <textarea className="input" rows={2} placeholder="What happened, in a sentence" value={note} onChange={e => setNote(e.target.value)} />
+            <select className="input" value={sessionId} onChange={e => setSessionId(e.target.value)}>
+              <option value="">Session where it came up (optional)</option>
+              {sessions.map(s => <option key={s.id} value={s.id}>{s.displayDate || s.date} · {s.shortTitle || s.title}</option>)}
+            </select>
+            <button disabled={busy || !outcome || !note.trim()} onClick={() => run(() => pm.updateGrowth('prediction', g.id, { status: 'scored', outcome, outcome_note: note.trim(), outcome_session_id: sessionId || null }, 'Scored by coach'))}
+              className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold" style={{ opacity: outcome && note.trim() ? 1 : 0.5 }}>Save score</button>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2 items-center">
+          <button disabled={busy} onClick={() => setMode(mode === 'score' ? null : 'score')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'score' ? 'btn-primary' : 'surface')}>Score it</button>
+          {!g.shared_with_client && <button disabled={busy} onClick={() => run(() => pm.updateGrowth('prediction', g.id, { shared_with_client: true }, 'Shared with the client'))} className="surface px-3 py-1.5 rounded-lg text-sm">Mark as shared with client</button>}
+          <span className="text-faint text-xs ml-auto hidden md:inline">{g.shared_with_client ? 'Shared: the client sees it' : 'Not shared: the client does not see it'}</span>
+        </div>
+      </div>
+    );
+  }
+  if (!['active'].includes(g.status)) return <p className="text-faint text-xs">{g.status === 'done' ? 'Done.' : g.status}</p>;
+  return (
+    <div>
+      {mode && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <textarea autoFocus className="input flex-1" rows={2} style={{ minWidth: 220 }} placeholder={mode === 'done' ? 'What happened, and did it help?' : 'Why drop it?'} value={note} onChange={e => setNote(e.target.value)} />
+          <button disabled={busy || !note.trim()} onClick={() => run(() => pm.updateGrowth('intervention', g.id, mode === 'done' ? { status: 'done', result: note.trim() } : { status: 'dropped', result: note.trim() }, mode === 'done' ? 'Result recorded by coach' : 'Dropped by coach'))}
+            className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold" style={{ opacity: note.trim() ? 1 : 0.5 }}>{mode === 'done' ? 'Save and mark done' : 'Drop'}</button>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 items-center">
+        <button disabled={busy} onClick={() => setMode(mode === 'done' ? null : 'done')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'done' ? 'btn-primary' : 'surface')}>Record result</button>
+        <button disabled={busy} onClick={() => setMode(mode === 'drop' ? null : 'drop')} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Drop</button>
+        <span className="text-faint text-xs ml-auto hidden md:inline">Active: the client sees it</span>
+      </div>
+    </div>
+  );
+}
+
+// One Growth section on the overview: predictions, nudges, interventions, or My Evolution.
+function PmGrowthCard({ sec, col, items, waiting, clientView, open }) {
+  const isEvo = sec.id === 'evolution';
+  if (!items.length) return (
+    <button onClick={() => open(isEvo ? 'growth/evolution' : `growth/${sec.id}`)} className="text-left rounded-xl p-3.5 hover:bg-primary-soft transition" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--border)' }}>
+      <p className="font-semibold text-sm">{sec.title}</p>
+      <p className="text-faint text-xs mt-1 leading-relaxed">{sec.line}</p>
+      <div className="flex gap-2 mt-2 flex-wrap">
+        <PmChip>Not yet</PmChip>
+        {waiting > 0 && <PmChip color="#d97706">{waiting} to review</PmChip>}
+      </div>
+    </button>
+  );
+  return (
+    <div className="rounded-xl p-3.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${col.color}` }}>
+      <p className="font-semibold text-sm mb-2">{sec.title}</p>
+      <div className="space-y-1.5">
+        {isEvo
+          ? <button onClick={() => open('growth/evolution')} className="w-full text-left rounded-lg px-2.5 py-2 hover:bg-primary-soft transition" style={{ border: '1px solid var(--border)' }}>
+              {items.slice(0, 3).map(e => <p key={e.id} className="text-sm leading-snug mb-1"><span className="text-faint text-xs mr-2">{pmDate(e.at)}</span>{e.text}</p>)}
+              {items.length > 3 && <p className="text-faint text-xs">+ {items.length - 3} more</p>}
+            </button>
+          : items.map(g => (
+            <button key={g.id} onClick={() => open(`growth/${sec.id}/${g.id}`)} className="w-full text-left rounded-lg px-2.5 py-2 hover:bg-primary-soft transition" style={{ border: '1px solid var(--border)' }}>
+              <p className="text-sm leading-snug">{sec.id === 'prediction' ? g.situation : g.opportunity}</p>
+              <div className="flex gap-1.5 mt-1.5 flex-wrap items-center">
+                {sec.id === 'prediction'
+                  ? (g.status === 'scored' ? <PmChip color={PM_OUTCOME_COLOR[g.outcome]}>{PM_OUTCOME[g.outcome]}</PmChip> : <PmChip color="#60a5fa">For {pmShortDate(g.situation_date)}</PmChip>)
+                  : <PmChip color="#34d399">{PM_KIND[g.kind]}{g.status === 'done' ? ' · done' : ''}</PmChip>}
+                {!clientView && <span className="text-faint text-[10px] font-mono">{g.code}</span>}
+                {!clientView && sec.id === 'prediction' && !g.shared_with_client && <PmChip>Not shared</PmChip>}
+              </div>
+            </button>
+          ))}
+      </div>
+      {waiting > 0 && <p className="text-[11px] mt-2" style={{ color: '#d97706' }}>+ {waiting} waiting for review</p>}
+    </div>
+  );
+}
+
+// Review of proposals. Accept is offered only when the database would allow it.
+function PmGrowthReviewActions({ g, type, pm, onDone }) {
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const fs = type === 'prediction' ? pmFindingsOf(pm, g) : [pm.findings.find(f => f.id === g.finding_id)].filter(Boolean);
+  const blockers = fs.filter(f => f.status !== 'confirmed' || (type === 'prediction' && !['live', 'solid'].includes(f.confidence)));
+  const run = async (fn) => { setBusy(true); const ok = await fn(); setBusy(false); if (ok) onDone(); };
+  return (
+    <div>
+      {rejecting && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <input autoFocus className="input flex-1" style={{ minWidth: 220 }} placeholder="Why? (kept with the record)" value={reason} onChange={e => setReason(e.target.value)} />
+          <button disabled={busy || !reason.trim()} onClick={() => run(() => pm.updateGrowth(type, g.id, { status: 'rejected', reject_reason: reason.trim() }, reason.trim()))}
+            className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#f87171', color: 'white', opacity: reason.trim() ? 1 : 0.5 }}>Reject</button>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 items-center">
+        <button disabled={busy || blockers.length > 0} onClick={() => run(() => pm.updateGrowth(type, g.id, { status: type === 'prediction' ? 'open' : 'active' }, 'Accepted by coach'))}
+          className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold" style={{ opacity: blockers.length ? 0.45 : 1 }}>Accept</button>
+        <button disabled={busy} onClick={() => setRejecting(!rejecting)} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Reject</button>
+        <span className="text-faint text-xs ml-auto">
+          {blockers.length
+            ? `Confirm ${blockers.map(f => f.code).join(', ')} first${type === 'prediction' && blockers.some(f => !['live', 'solid'].includes(f.confidence)) ? ' (predictions need Live or Solid)' : ''}`
+            : type === 'prediction' ? 'Accepting logs it. Its wording is then fixed; share it separately.' : 'Accepting shows it to the client.'}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function PmEyebrow({ children, color }) {
@@ -3753,7 +4060,15 @@ function PmFindingBody({ f, pm, data, clientView }) {
       </section>
 
       <PmBlock title="What could help">
-        <p>Nothing is linked to this yet. Practices and experiments are chosen together in session.</p>
+        {(() => {
+          const ints = pm.interventions.filter(i => i.finding_id === f.id && (clientView ? ['active', 'done'].includes(i.status) : i.status !== 'rejected'));
+          const preds = clientView ? [] : pm.predictions.filter(p => (p.finding_ids || []).includes(f.id) && p.status !== 'rejected');
+          if (!ints.length && !preds.length) return <p>Nothing is linked to this yet. Practices and experiments are chosen together in session.</p>;
+          return <ul className="space-y-2">
+            {ints.map(i => <li key={i.id}><span className="text-[var(--text)]">{PM_KIND[i.kind]}: </span>{i.action}{!clientView && <span className="text-faint text-sm"> ({i.code}, {i.status})</span>}</li>)}
+            {preds.map(p => <li key={p.id}><span className="text-[var(--text)]">Prediction: </span>{p.situation}<span className="text-faint text-sm"> ({p.code}, {p.status})</span></li>)}
+          </ul>;
+        })()}
       </PmBlock>
 
       {!clientView && (
@@ -3776,7 +4091,7 @@ function PmEmptyBody({ col, sec, clientView, pending, onNav }) {
       <PmBlock title="What we looked at"><p>{sec.line}.</p></PmBlock>
       <PmBlock title="Result">
         {col.id === 'growth'
-          ? <p>{clientView ? 'This part is built from findings we have looked at together. It opens once there are some.' : 'Predictions, nudges, interventions and My Evolution arrive in Slice 3, built on confirmed findings.'}</p>
+          ? <p>{clientView ? 'This part is built from findings we have looked at together. It fills in once there are some.' : 'Nothing accepted here yet. Proposals wait in the Review Queue and can be accepted once the findings they rest on are confirmed.'}</p>
           : <p><strong className="text-[var(--text)]">Nothing here yet.</strong> {clientView ? 'We do not fill an area just to have something to show.' : 'No confirmed finding in this section.'}</p>}
         {!clientView && pending > 0 && (
           <button onClick={() => onNav('/model/review')} className="text-primary text-sm mt-3 block">{pending} candidate{pending === 1 ? '' : 's'} for this section waiting in the Review Queue</button>
@@ -3845,10 +4160,15 @@ function PmOverview({ data, pm, onNav, isCoach }) {
 
   const visible = pm.findings.filter(f => PM_CLIENT_VISIBLE.includes(f.status));
   const candidates = pm.findings.filter(f => f.status === 'candidate');
-  const pages = pmPages(visible);
+  const growth = pmGrowth(pm, clientView);
+  const proposals = { prediction: pm.predictions.filter(p => p.status === 'proposed').length,
+    nudges: pm.interventions.filter(i => i.status === 'proposed' && i.kind === 'nudge').length,
+    interventions: pm.interventions.filter(i => i.status === 'proposed' && i.kind !== 'nudge').length, evolution: 0 };
+  const proposalCount = proposals.prediction + proposals.nudges + proposals.interventions;
+  const pages = pmPages(visible, growth);
   const idx = pages.findIndex(p => p.key === openKey);
   const page = idx >= 0 ? pages[idx] : null;
-  const label = (p) => p.f ? `${p.col.title} · ${p.sec.title}${p.of > 1 ? ` (${p.n} of ${p.of})` : ''}` : `${p.col.title} · ${p.sec.title}`;
+  const label = (p) => (p.f || p.g) ? `${p.col.title} · ${p.sec.title}${p.of > 1 ? ` (${p.n} of ${p.of})` : ''}` : `${p.col.title} · ${p.sec.title}`;
   const sessionsSeen = new Set(pm.evidence.filter(e => visible.some(f => f.id === e.finding_id)).map(e => e.session_id)).size;
   const name = data.profile?.preferredName || (data.profile?.name || '').split(' ')[0];
 
@@ -3858,7 +4178,7 @@ function PmOverview({ data, pm, onNav, isCoach }) {
     [visible.filter(f => f.confidence === 'thin').length, 'Questions for you'],
     [visible.filter(f => f.status === 'disputed').length, 'Under review'],
   ];
-  if (!clientView) stats.push([candidates.length, 'Waiting for review']);
+  if (!clientView) stats.push([candidates.length + proposalCount, 'Waiting for review']);
 
   return (
     <div className="fade-in">
@@ -3881,6 +4201,7 @@ function PmOverview({ data, pm, onNav, isCoach }) {
           const secs = col.id === 'growth' ? PM_GROWTH_SECTIONS : PM_SECTIONS[col.id];
           const colItems = col.id === 'growth' ? [] : visible.filter(f => pmPlace(f).startsWith(col.id + '/'));
           const qs = colItems.filter(f => f.confidence === 'thin').length;
+          const gCount = growth.prediction.length + growth.nudges.length + growth.interventions.length;
           return (
             <div key={col.id} className="surface rounded-2xl p-4 flex flex-col gap-3">
               <div className="flex items-center gap-3 px-1 pt-1">
@@ -3891,11 +4212,17 @@ function PmOverview({ data, pm, onNav, isCoach }) {
                 </div>
               </div>
               <p className="text-[10px] tracking-[0.18em] uppercase px-1 pb-2" style={{ color: col.color, borderBottom: '1px solid var(--border)' }}>
-                {col.id === 'growth' ? 'Not started yet' : `${colItems.length} finding${colItems.length === 1 ? '' : 's'}${qs ? ` · ${qs} question${qs === 1 ? '' : 's'}` : ''}`}
+                {col.id === 'growth'
+                  ? (gCount ? `${gCount} item${gCount === 1 ? '' : 's'}${growth.evolution.length ? ` · ${growth.evolution.length} change${growth.evolution.length === 1 ? '' : 's'}` : ''}` : growth.evolution.length ? `${growth.evolution.length} change${growth.evolution.length === 1 ? '' : 's'}` : 'Not started yet')
+                  : `${colItems.length} finding${colItems.length === 1 ? '' : 's'}${qs ? ` · ${qs} question${qs === 1 ? '' : 's'}` : ''}`}
               </p>
               {secs.map(sec => {
-                const items = col.id === 'growth' ? [] : visible.filter(pmIn(col, sec)).sort(pmSort);
-                const waiting = col.id === 'growth' ? 0 : candidates.filter(pmIn(col, sec)).length;
+                if (col.id === 'growth') return (
+                  <PmGrowthCard key={sec.id} sec={sec} col={col} items={sec.id === 'evolution' ? growth.evolution : growth[sec.id]} waiting={clientView ? 0 : proposals[sec.id]}
+                    clientView={clientView} open={(k) => setOpenKey(k)} />
+                );
+                const items = visible.filter(pmIn(col, sec)).sort(pmSort);
+                const waiting = candidates.filter(pmIn(col, sec)).length;
                 if (!items.length) return (
                   <button key={sec.id} onClick={() => setOpenKey(`${col.id}/${sec.id}`)} className="text-left rounded-xl p-3.5 hover:bg-primary-soft transition" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--border)' }}>
                     <p className="font-semibold text-sm">{sec.title}</p>
@@ -3934,12 +4261,19 @@ function PmOverview({ data, pm, onNav, isCoach }) {
         <PmReader crumbs={[clientView ? 'Your read' : `${name}'s model`, page.col.title, page.sec.title]}
           onClose={() => setOpenKey(null)}
           prev={idx > 0 ? { label: label(pages[idx - 1]), go: () => setOpenKey(pages[idx - 1].key) } : null}
-          next={idx < pages.length - 1 ? { label: label(pages[idx + 1]), go: () => setOpenKey(pages[idx + 1].key) } : null}>
+          next={idx < pages.length - 1 ? { label: label(pages[idx + 1]), go: () => setOpenKey(pages[idx + 1].key) } : null}
+          footer={page.g && !clientView ? <PmGrowthActions key={page.g.id} g={page.g} type={page.gType} pm={pm} data={data} /> : null}>
           {page.f
             ? <><PmFindingTitle f={page.f} clientView={clientView} color={page.col.color} eyebrow={`${page.col.title} · ${page.sec.title}${page.of > 1 ? ` (${page.n} of ${page.of})` : ''}`} />
                 <PmFindingBody f={page.f} pm={pm} data={data} clientView={clientView} /></>
+            : page.g
+            ? <><PmGrowthTitle g={page.g} type={page.gType} clientView={clientView} color={page.col.color} eyebrow={`${page.col.title} · ${page.sec.title}${page.of > 1 ? ` (${page.n} of ${page.of})` : ''}`} />
+                {page.gType === 'prediction' ? <PmPredictionBody p={page.g} pm={pm} clientView={clientView} /> : <PmInterventionBody i={page.g} pm={pm} clientView={clientView} />}</>
+            : page.evolution
+            ? <><div className="mb-8"><PmEyebrow color={page.col.color}>{page.col.title}</PmEyebrow><h2 className="text-2xl font-bold">{page.sec.title}</h2></div>
+                <PmEvolutionBody entries={page.evolution} clientView={clientView} /></>
             : <><div className="mb-8"><PmEyebrow color={page.col.color}>{page.col.title}</PmEyebrow><h2 className="text-2xl font-bold">{page.sec.title}</h2></div>
-                <PmEmptyBody col={page.col} sec={page.sec} clientView={clientView} onNav={onNav} pending={page.col.id === 'growth' ? 0 : candidates.filter(pmIn(page.col, page.sec)).length} /></>}
+                <PmEmptyBody col={page.col} sec={page.sec} clientView={clientView} onNav={onNav} pending={page.col.id === 'growth' ? (clientView ? 0 : proposals[page.sec.id] || 0) : candidates.filter(pmIn(page.col, page.sec)).length} /></>}
         </PmReader>
       )}
     </div>
@@ -4015,10 +4349,18 @@ function PmReviewView({ data, pm, isCoach, onNav }) {
   const [clientView, setClientView] = usePmClientView();
   const [openId, setOpenId] = useState(null);
   const [showClosed, setShowClosed] = useState(false);
+  const [openG, setOpenG] = useState(null);
   const order = useRef([]);
   if (pm.status === 'loading' || pm.status === 'idle') return <p className="text-faint text-sm">Loading…</p>;
   if (pm.status === 'error') return <p className="text-secondary text-sm">Couldn't load the model: {pm.error}</p>;
 
+  const gQueue = [
+    ...pm.predictions.filter(p => p.status === 'proposed').map(g => ({ g, type: 'prediction' })),
+    ...pm.interventions.filter(i => i.status === 'proposed').map(g => ({ g, type: 'intervention' })),
+  ];
+  const gi = gQueue.findIndex(x => x.g.id === openG);
+  const gOpen = gi >= 0 ? gQueue[gi] : null;
+  const gWaits = ({ g, type }) => (type === 'prediction' ? pmFindingsOf(pm, g) : [pm.findings.find(f => f.id === g.finding_id)].filter(Boolean)).filter(f => f.status !== 'confirmed');
   const queue = pm.findings.filter(f => f.status === 'candidate').sort(pmSort);
   const closed = pm.findings.filter(f => ['rejected', 'merged'].includes(f.status));
   const confirmed = pm.findings.filter(f => f.status === 'confirmed').length;
@@ -4045,13 +4387,13 @@ function PmReviewView({ data, pm, isCoach, onNav }) {
         sub="Candidates Claude proposed from the transcripts, most important first. Open one to read it exactly as the client would, then confirm, reword, merge or reject."
         clientView={clientView} setClientView={setClientView} isCoach={isCoach} />
       <div className="grid grid-cols-3 gap-3 mb-6">
-        {[[queue.length, 'To review', 'var(--secondary)'], [confirmed, 'Confirmed'], [closed.length, 'Rejected / merged']].map(([v, l, c]) => (
+        {[[queue.length + gQueue.length, 'To review', 'var(--secondary)'], [confirmed, 'Confirmed'], [closed.length, 'Rejected / merged']].map(([v, l, c]) => (
           <div key={l} className="surface rounded-xl px-4 py-3"><div className="text-3xl font-light" style={{ color: c || 'var(--text)' }}>{v}</div><div className="text-[10px] tracking-[0.18em] text-faint mt-1 uppercase">{l}</div></div>
         ))}
       </div>
 
       {queue.length === 0
-        ? <div className="surface rounded-2xl p-8 text-center"><p className="text-dim reading">Nothing waiting. Run the person-model pass in Claude Code to propose candidates.</p>
+        ? <div className="surface rounded-2xl p-8 text-center"><p className="text-dim reading">No findings waiting. Run the person-model pass in Claude Code to propose candidates.</p>
             {confirmed > 0 && <button onClick={() => onNav('/model/overview')} className="text-primary text-sm mt-2">Open the model</button>}</div>
         : <div className="surface rounded-2xl p-2">
             {queue.map((f, i) => (
@@ -4068,6 +4410,40 @@ function PmReviewView({ data, pm, isCoach, onNav }) {
               </button>
             ))}
           </div>}
+
+      {gQueue.length > 0 && (
+        <div className="mt-8">
+          <PmEyebrow color="#34d399">Growth proposals · {gQueue.length}</PmEyebrow>
+          <p className="text-faint text-xs mb-3">Predictions and interventions. Each can be accepted once the findings it rests on are confirmed.</p>
+          <div className="surface rounded-2xl p-2">
+            {gQueue.map((x, i) => {
+              const waits = gWaits(x);
+              return (
+                <button key={x.g.id} onClick={() => setOpenG(x.g.id)} className="w-full text-left rounded-xl px-4 py-3 hover:bg-primary-soft transition flex gap-4 items-start" style={i ? { borderTop: '1px solid var(--border)' } : {}}>
+                  <span className="text-faint text-xs font-mono pt-1 shrink-0 w-12">{x.g.code}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="leading-snug">{x.type === 'prediction' ? x.g.situation : x.g.opportunity}</p>
+                    <p className="text-faint text-xs mt-1">{x.type === 'prediction' ? `Prediction for ${pmShortDate(x.g.situation_date)}` : PM_KIND[x.g.kind]} · rests on {(x.type === 'prediction' ? pmFindingsOf(pm, x.g) : [pm.findings.find(f => f.id === x.g.finding_id)].filter(Boolean)).map(f => f.code).join(', ')}</p>
+                  </div>
+                  <div className="flex gap-1.5 shrink-0 pt-0.5">
+                    {waits.length ? <PmChip>Waits for {waits.map(f => f.code).join(', ')}</PmChip> : <PmChip color="#34d399">Ready</PmChip>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {gOpen && (
+        <PmReader crumbs={['Review Queue', 'Growth', gOpen.g.code]} onClose={() => setOpenG(null)}
+          prev={gi > 0 ? { label: gQueue[gi - 1].g.code, go: () => setOpenG(gQueue[gi - 1].g.id) } : null}
+          next={gi < gQueue.length - 1 ? { label: gQueue[gi + 1].g.code, go: () => setOpenG(gQueue[gi + 1].g.id) } : null}
+          footer={<PmGrowthReviewActions key={gOpen.g.id} g={gOpen.g} type={gOpen.type} pm={pm} onDone={() => setOpenG(gQueue[gi + 1]?.g.id || null)} />}>
+          <PmGrowthTitle g={gOpen.g} type={gOpen.type} clientView={false} color="#34d399" eyebrow={gOpen.type === 'prediction' ? 'Proposed prediction' : `Proposed ${PM_KIND[gOpen.g.kind].toLowerCase()}`} />
+          {gOpen.type === 'prediction' ? <PmPredictionBody p={gOpen.g} pm={pm} clientView={false} /> : <PmInterventionBody i={gOpen.g} pm={pm} clientView={false} />}
+        </PmReader>
+      )}
 
       {closed.length > 0 && (
         <div className="mt-8">
