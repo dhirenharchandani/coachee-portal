@@ -3591,9 +3591,6 @@ function PmHeader({ eyebrow, title, sub, clientView, setClientView, isCoach }) {
           </button>
         )}
       </div>
-      {clientView && (
-        <p className="text-xs text-faint mt-3">Client view: confirmed findings only. Coach-only details are hidden. Clients cannot open this page themselves.</p>
-      )}
     </div>
   );
 }
@@ -4326,8 +4323,7 @@ function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
             <p className="text-faint text-xs tracking-[0.2em] mb-2">{clientView ? 'YOUR READ' : 'PERSON MODEL'}</p>
             <h1 className="text-3xl md:text-4xl font-bold mb-3">{clientView ? 'Your read' : `${name}'s read`}</h1>
             <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>
-              {read ? `Built from ${plural(read.sessions, 'session')}, ${pmDay(read.first)} to ${pmDay(read.last)}.` : 'Built from your sessions.'}
-              {' '}{clientView ? 'What we have learned together so far.' : `Confirmed findings, laid out as ${name} sees them.`}
+              {clientView ? 'What we have learned together so far.' : `Confirmed findings, laid out as ${name} sees them.`}
             </p>
           </div>
           {isCoach && (
@@ -4337,7 +4333,6 @@ function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
             </button>
           )}
         </div>
-        {clientView && !forceClient && <p className="text-xs text-faint mt-3">Client view: confirmed findings only, as {name} sees them in their own login once you switch it on.</p>}
       </div>
 
       {!clientView && candidates.length + proposalCount > 0 && (
@@ -4644,7 +4639,7 @@ function pmPrintRead(pm, data, name) {
   const visible = pm.findings.filter(f => PM_CLIENT_VISIBLE.includes(f.status));
   const read = pmReadInfo(pm);
   const growth = pmGrowth(pm, true);
-  let body = `<h1>Your read</h1><p class="sub">${read ? `Built from ${read.sessions} sessions, ${pmDay(read.first)} to ${pmDay(read.last)}.` : ''} Downloaded ${pmDate(new Date().toISOString())}.</p>`;
+  let body = `<h1>Your read</h1><p class="sub">Downloaded ${pmDate(new Date().toISOString())}.</p>`;
   for (const col of PM_COLUMNS.filter(c => c.id !== 'growth')) {
     const fs = visible.filter(f => pmPlace(f).startsWith(col.id + '/')).sort(pmSort);
     if (!fs.length) continue;
