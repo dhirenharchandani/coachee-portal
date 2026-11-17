@@ -1,5 +1,5 @@
 // Person model, client access: a per-client switch, one client-safe read function, and three client actions
-// (agree to the read, ask to delete it, respond to a finding).
+// (agree to the read, ask to delete it, respond to a finding), and the coach's delete.
 //
 //   pm_client_settings   one row per coachee: is the read switched on for them, and (phase 2) consent and
 //                        delete requests. Coach-only table; the client never reads it directly.
@@ -184,6 +184,33 @@ const step = (t) => console.log(`\n--- ${t} ---`);
     await sql(`GRANT EXECUTE ON FUNCTION public.${fn} TO authenticated;`);
   }
 
-  step('4. Check');
+  step('4. Coach: delete a client\'s read');
+  // Deletes everything in the read (runs, findings with their evidence and history, predictions, interventions,
+  // growth history) in one go, switches the read off, clears consent, and records when. Session transcripts
+  // are kept: they are the record of the sessions, not part of the read. Coach logins only.
+  await sql(`ALTER TABLE public.pm_client_settings ADD COLUMN IF NOT EXISTS read_deleted_at TIMESTAMPTZ;`);
+  await sql(`
+    CREATE OR REPLACE FUNCTION public.pm_coach_delete_read(coachee UUID) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+    DECLARE nf INT; np INT; ni INT; nr INT;
+    BEGIN
+      IF NOT coalesce((${IS_COACH}), false) THEN RAISE EXCEPTION 'Only the coach can delete a read'; END IF;  -- no email counts as no
+      IF NOT EXISTS (SELECT 1 FROM public.coachees WHERE id = coachee) THEN RAISE EXCEPTION 'No such client'; END IF;
+      DELETE FROM public.pm_growth_history WHERE coachee_id = coachee;
+      DELETE FROM public.pm_predictions WHERE coachee_id = coachee; GET DIAGNOSTICS np = ROW_COUNT;
+      DELETE FROM public.pm_interventions WHERE coachee_id = coachee; GET DIAGNOSTICS ni = ROW_COUNT;
+      UPDATE public.pm_findings SET merged_into = NULL WHERE coachee_id = coachee AND merged_into IS NOT NULL;
+      DELETE FROM public.pm_findings WHERE coachee_id = coachee; GET DIAGNOSTICS nf = ROW_COUNT;  -- evidence and history cascade
+      DELETE FROM public.pm_runs WHERE coachee_id = coachee; GET DIAGNOSTICS nr = ROW_COUNT;
+      INSERT INTO public.pm_client_settings (coachee_id, visible, read_deleted_at) VALUES (coachee, false, now())
+      ON CONFLICT (coachee_id) DO UPDATE SET visible = false, consent_at = NULL, consent_version = NULL,
+        delete_requested_at = NULL, read_deleted_at = now();
+      RETURN jsonb_build_object('findings', nf, 'predictions', np, 'interventions', ni, 'runs', nr);
+    END $$;
+  `);
+  await sql(`REVOKE ALL ON FUNCTION public.pm_coach_delete_read(uuid) FROM public, anon;`);
+  await sql(`GRANT EXECUTE ON FUNCTION public.pm_coach_delete_read(uuid) TO authenticated;`);
+
+  step('5. Check');
   console.log(JSON.stringify(await sql(`SELECT proname, prosecdef FROM pg_proc WHERE proname = 'pm_client_read';`)));
 })().catch(e => { console.error(e.message); process.exit(1); });

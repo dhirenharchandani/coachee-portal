@@ -3522,6 +3522,21 @@ function usePersonModel(coacheeId, enabled) {
     return true;
   };
 
+  // Deletes the whole read for this client (pm_coach_delete_read): findings, quotes, history, growth, runs.
+  // Switches it off and clears consent. Session transcripts are kept.
+  const deleteRead = async () => {
+    if (MOCK_COACH) {
+      const m = mock.current;
+      for (const k of ['findings', 'evidence', 'history', 'predictions', 'interventions', 'growth_history', 'runs']) m[k] = [];
+      m.settings = { visible: false, read_deleted_at: new Date().toISOString() };
+      await load(); return true;
+    }
+    const { error } = await sb.rpc('pm_coach_delete_read', { coachee: coacheeId });
+    if (error) throw new Error('Could not delete: ' + error.message);
+    await load();
+    return true;
+  };
+
   const byFinding = useMemo(() => {
     const ev = {}, hi = {}, gh = {};
     state.evidence.forEach(e => { (ev[e.finding_id] = ev[e.finding_id] || []).push(e); });
@@ -3531,7 +3546,7 @@ function usePersonModel(coacheeId, enabled) {
   }, [state.evidence, state.history, state.growthHistory]);
 
   return { ...state, evidenceFor: id => byFinding.ev[id] || [], historyFor: id => byFinding.hi[id] || [], growthHistoryFor: id => byFinding.gh[id] || [],
-    update, merge, updateGrowth, setClientVisible, reload: load };
+    update, merge, updateGrowth, setClientVisible, deleteRead, reload: load };
 }
 
 // Every save in the person model goes through this: it can't leave buttons stuck, it gives up after 20s
@@ -4262,7 +4277,18 @@ function PmClientAccess({ pm, name }) {
     const r = await pmAttempt(() => pm.setClientVisible(!on));
     setBusy(false); if (!r.ok) setErr(r.error);
   };
-  const status = !on ? `${name} can't see the read yet. Read it through in "Show as client" first, then turn it on.`
+  const hasRead = pm.findings.length + pm.predictions.length + pm.interventions.length + pm.runs.length > 0;
+  const askedDelete = !!s?.delete_requested_at;
+  const del = async () => {
+    const typed = window.prompt(`Delete ${name}'s read?\n\nThis permanently deletes every finding, quote, prediction, suggestion and their history for ${name}, switches the read off and clears ${name}'s agreement. Session transcripts are kept. It cannot be undone.\n\nType ${name} to confirm.`);
+    if (typed === null) return;
+    if (typed.trim().toLowerCase() !== String(name).trim().toLowerCase()) { setErr(`Not deleted: that didn't match "${name}".`); return; }
+    setBusy(true); setErr('');
+    const r = await pmAttempt(() => pm.deleteRead());
+    setBusy(false); if (!r.ok) setErr(r.error);
+  };
+  const status = !hasRead && s?.read_deleted_at ? `${name}'s read was deleted on ${pmDate(s.read_deleted_at)}.`
+    : !on ? `${name} can't see the read yet. Read it through in "Show as client" first, then turn it on.`
     : s.consent_at ? `On. ${name} agreed on ${pmDate(s.consent_at)}${s.delete_requested_at ? `. ${name} asked to delete it on ${pmDate(s.delete_requested_at)}.` : '.'}`
     : `On since ${s.visible_changed_at ? pmDate(s.visible_changed_at) : 'today'}. ${name} is asked to agree before anything shows.`;
   return (
@@ -4271,9 +4297,14 @@ function PmClientAccess({ pm, name }) {
       <div className="flex-1 min-w-0">
         <p className="font-semibold text-sm">{name}'s own login</p>
         <p className="text-faint text-sm mt-0.5">{status}</p>
+        {askedDelete && hasRead && <p className="text-sm mt-1" style={{ color: '#f87171' }}>{name} asked for the read to be deleted on {pmDate(s.delete_requested_at)}.</p>}
         <PmSaveState busy={busy} err={err} />
       </div>
-      <button disabled={busy} onClick={toggle} className={'px-4 py-1.5 rounded-lg text-sm font-semibold shrink-0 ' + (on ? 'surface' : 'btn-primary')}>{on ? 'Turn off' : `Show ${name} the read`}</button>
+      <div className="flex gap-2 shrink-0 flex-wrap">
+        {hasRead && <button disabled={busy} onClick={toggle} className={'px-4 py-1.5 rounded-lg text-sm font-semibold ' + (on ? 'surface' : 'btn-primary')}>{on ? 'Turn off' : `Show ${name} the read`}</button>}
+        {hasRead && <button disabled={busy} onClick={del} className={'px-3 py-1.5 rounded-lg text-sm ' + (askedDelete ? 'font-semibold' : 'surface')}
+          style={askedDelete ? { background: '#f87171', color: 'white' } : { color: '#f87171' }}>{askedDelete ? 'Delete now' : 'Delete the read'}</button>}
+      </div>
     </div>
   );
 }
