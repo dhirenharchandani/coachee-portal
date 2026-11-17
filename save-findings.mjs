@@ -22,8 +22,14 @@
 //       "code": "F-007",                  // existing finding; 'candidate' ones are changed; confirmed / disputed ones only with --coach-approved
 //       "reason": "...",                  // required; logged against every changed field in pm_finding_history
 //       "set": { "episodes"?, "confidence"?, "counter_evidence"?, "scope"?, "exceptions"?, "statement"?, "mechanism"?,
-//                "alternative"?, "client_headline"?, "client_question"?, "importance"?, "pattern_sequence"?, "domains"? },
-//       "evidence": [ same shape as above ]   // added to the finding; each quote checked word for word
+//                "alternative"?, "client_headline"?, "client_question"?, "importance"?, "pattern_sequence"?, "domains"?,
+//                "type"?, "lens"?,          // a finding set to type 'loop' needs a full five-step pattern_sequence
+//                "client_undervalues"?, "coach_framed"?, "works_against_aims"? },   // booleans
+//       "merge_into"?: "F-003",           // mark this finding merged into another (coach-approved only). Its evidence
+//                                         // is NOT moved: add what the survivor needs to the survivor's own update
+//       "evidence": [ same shape as above ],  // added to the finding; each quote checked word for word
+//       "remove_evidence": [ { "session_id", "quote" } ]  // quotes taken off this finding (exact stored text); the
+//                                         // removed quotes are named in the logged reason
 //   } ]
 // }
 
@@ -146,8 +152,11 @@ function gate(f, transcripts, clientNames) {
 
   // Updates to existing findings: same quote checks, but a finding the coach has already acted on is never touched.
   const UPDATABLE = ['episodes', 'confidence', 'counter_evidence', 'scope', 'exceptions', 'statement', 'mechanism', 'alternative',
-    'client_headline', 'client_question', 'importance', 'pattern_sequence', 'domains'];
-  const existing = new Map((await sql(`SELECT id, code, status FROM public.pm_findings WHERE coachee_id = '${coachee.id}'`)).map(r => [r.code, r]));
+    'client_headline', 'client_question', 'importance', 'pattern_sequence', 'domains', 'type', 'lens', 'client_undervalues', 'coach_framed', 'works_against_aims'];
+  const BOOLS = ['client_undervalues', 'coach_framed', 'works_against_aims'];
+  const TYPES = ['characteristic', 'strength', 'vulnerability', 'self_perception_gap', 'loop', 'connection', 'conflict', 'impact_on_others'];
+  const existing = new Map((await sql(`SELECT id, code, status, type, pattern_sequence FROM public.pm_findings WHERE coachee_id = '${coachee.id}'`)).map(r => [r.code, r]));
+  const allEvidence = await sql(`SELECT e.id, e.finding_id, e.session_id, e.quote FROM public.pm_evidence e JOIN public.pm_findings f ON f.id = e.finding_id WHERE f.coachee_id = '${coachee.id}'`);
   results.updated = []; results.update_rejected = [];
   const toUpdate = [];
   for (const u of p.updates || []) {
@@ -160,6 +169,23 @@ function gate(f, transcripts, clientNames) {
     if (bad.length) reasons.push(`fields not updatable here: ${bad.join(', ')}`);
     if (u.set?.counter_evidence !== undefined && !String(u.set.counter_evidence).trim()) reasons.push('counter-evidence blank');
     if (u.set?.alternative !== undefined && !String(u.set.alternative).trim()) reasons.push('alternative blank');
+    if (u.set?.type !== undefined && !TYPES.includes(u.set.type)) reasons.push(`unknown type ${u.set.type}`);
+    if (u.set?.lens !== undefined && !['my_os', 'my_insights'].includes(u.set.lens)) reasons.push(`unknown lens ${u.set.lens}`);
+    if (row && (u.set?.type ?? row.type) === 'loop') {
+      const seq = u.set?.pattern_sequence ?? row.pattern_sequence ?? [];
+      if (LOOP_STEPS.some(st => !seq.map(x => x.step).includes(st))) reasons.push('loop without all five steps');
+    }
+    for (const k of BOOLS) if (u.set?.[k] !== undefined && typeof u.set[k] !== 'boolean') reasons.push(`${k} must be true or false`);
+    if (u.merge_into) {
+      if (!COACH_APPROVED) reasons.push('merge_into needs --coach-approved');
+      else if (!existing.get(u.merge_into) || u.merge_into === u.code) reasons.push(`merge_into: no other finding ${u.merge_into}`);
+    }
+    const removeIds = [];
+    for (const r of u.remove_evidence || []) {
+      const hit = row && allEvidence.find(e => e.finding_id === row.id && e.session_id === r.session_id && norm(e.quote) === norm(r.quote));
+      if (!hit) reasons.push(`remove: no such quote on ${u.code} in ${r.session_id}: "${norm(r.quote).slice(0, 60)}"`);
+      else removeIds.push(hit.id);
+    }
     const ev = [];
     for (const e of u.evidence || []) {
       const t = transcripts.get(e.session_id);
@@ -171,12 +197,12 @@ function gate(f, transcripts, clientNames) {
       ev.push({ ...e, transcript_id: t.id, speaker: loc.speaker });
     }
     if (reasons.length) results.update_rejected.push({ code: u.code, reasons });
-    else toUpdate.push({ u, row, evidence: ev });
+    else toUpdate.push({ u, row, evidence: ev, removeIds });
   }
 
   if (DRY) {
     results.accepted = toSave.map(x => ({ headline: x.f.client_headline, quotes: x.evidence.map(e => `${e.session_id} [${e.speaker}] ${norm(e.quote).slice(0, 50)}`) }));
-    results.updated = toUpdate.map(x => ({ code: x.u.code, set: Object.keys(x.u.set || {}), quotes: x.evidence.map(e => `${e.session_id} [${e.speaker}${e.is_counter ? ', counter' : ''}] ${norm(e.quote).slice(0, 50)}`) }));
+    results.updated = toUpdate.map(x => ({ code: x.u.code, set: Object.keys(x.u.set || {}), merge_into: x.u.merge_into, removes: x.removeIds.length, quotes: x.evidence.map(e => `${e.session_id} [${e.speaker}${e.is_counter ? ', counter' : ''}] ${norm(e.quote).slice(0, 50)}`) }));
     console.log(JSON.stringify({ dry: true, ...results }, null, 2));
     return;
   }
@@ -222,19 +248,24 @@ function gate(f, transcripts, clientNames) {
     SELECT '${findingId}', (x->>'transcript_id')::bigint, x->>'session_id', x->>'speaker', x->>'quote', x->>'class',
            coalesce((x->>'is_counter')::boolean, false), x->>'episode', x->>'note'
     FROM (SELECT ${J(e)} AS x) s`);
-  for (const { u, row, evidence } of toUpdate) {
+  for (const { u, row, evidence, removeIds } of toUpdate) {
     const set = u.set || {};
     const cols = Object.keys(set).map(k => {
       if (k === 'episodes') return `episodes = (x->'set'->>'episodes')::int`;
       if (k === 'pattern_sequence') return `pattern_sequence = x->'set'->'pattern_sequence'`;
       if (k === 'domains') return `domains = ARRAY(SELECT jsonb_array_elements_text(x->'set'->'domains'))`;
+      if (BOOLS.includes(k)) return `${k} = (x->'set'->>'${k}')::boolean`;
       return `${k} = x->'set'->>'${k}'`;
     });
-    const reason = row.status === 'candidate' ? `${u.reason} (Claude, ${p.run?.kind || 'manual'})` : `${u.reason} (approved by the coach; Claude, ${p.run?.kind || 'manual'})`;
+    const removed = (u.remove_evidence || []).map(r => `${r.session_id} "${norm(r.quote).slice(0, 60)}"`);
+    const why = removed.length ? `${u.reason} Removed quote(s): ${removed.join('; ')}.` : u.reason;
+    const reason = row.status === 'candidate' ? `${why} (Claude, ${p.run?.kind || 'manual'})` : `${why} (approved by the coach; Claude, ${p.run?.kind || 'manual'})`;
+    if (u.merge_into) cols.push(`status = 'merged'`, `merged_into = '${existing.get(u.merge_into).id}'`);
     await sql(`UPDATE public.pm_findings f SET ${[...cols, `last_change_reason = x->>'reason'`].join(', ')}
       FROM (SELECT ${J({ set, reason })} AS x) s WHERE f.id = '${row.id}' AND (f.status = 'candidate' OR (${COACH_APPROVED} AND f.status IN ('confirmed','disputed')))`);
+    if (removeIds.length) await sql(`DELETE FROM public.pm_evidence WHERE finding_id = '${row.id}' AND id IN (${removeIds.map(i => `'${i}'`).join(', ')})`);
     for (const e of evidence) await insertEvidence(row.id, e);
-    results.updated.push({ code: u.code, fields: Object.keys(set), quotes_added: evidence.length });
+    results.updated.push({ code: u.code, fields: Object.keys(set), quotes_added: evidence.length, quotes_removed: removeIds.length });
   }
   console.log(JSON.stringify({ run: runId, ...results }, null, 2));
 })().catch(e => { console.error(e.message); process.exit(1); });
