@@ -3416,7 +3416,7 @@ const PM_SECTIONS = {
 };
 
 function usePersonModel(coacheeId, enabled) {
-  const [state, setState] = useState({ status: 'idle', findings: [], evidence: [], history: [], predictions: [], interventions: [], growthHistory: [], runs: [], error: null });
+  const [state, setState] = useState({ status: 'idle', findings: [], evidence: [], history: [], predictions: [], interventions: [], growthHistory: [], runs: [], settings: null, error: null });
   const mock = useRef(null);
   const load = useCallback(async () => {
     if (enabled && MOCK_COACH) {
@@ -3424,11 +3424,12 @@ function usePersonModel(coacheeId, enabled) {
         const r = await fetch(`data/_preview/${MOCK_FOLDER}.pm.json?t=${Date.now()}`);
         mock.current = r.ok ? await r.json() : { findings: [], evidence: [], history: [], transcripts: {} };
         for (const k of ['predictions', 'interventions', 'growth_history', 'runs']) mock.current[k] = mock.current[k] || [];
+        mock.current.settings = mock.current.settings || null;
         window.__pmMock = mock.current;
       }
       const m = mock.current;
       setState({ status: 'ready', findings: [...m.findings], evidence: [...m.evidence], history: [...m.history],
-        predictions: [...m.predictions], interventions: [...m.interventions], growthHistory: [...m.growth_history], runs: [...m.runs], error: null });
+        predictions: [...m.predictions], interventions: [...m.interventions], growthHistory: [...m.growth_history], runs: [...m.runs], settings: m.settings, error: null });
       return;
     }
     if (!enabled || !sb || !coacheeId) return;
@@ -3445,15 +3446,16 @@ function usePersonModel(coacheeId, enabled) {
       if (ev.error || hi.error) { setState(s => ({ ...s, status: 'error', error: (ev.error || hi.error).message })); return; }
       evidence = ev.data || []; history = hi.data || [];
     }
-    const [pr, iv, gh, ru] = await Promise.all([
+    const [pr, iv, gh, ru, cs] = await Promise.all([
       sb.from('pm_predictions').select('*').eq('coachee_id', coacheeId).order('code'),
       sb.from('pm_interventions').select('*').eq('coachee_id', coacheeId).order('code'),
       sb.from('pm_growth_history').select('*').eq('coachee_id', coacheeId).order('changed_at'),
       sb.from('pm_runs').select('id, kind, sessions_read, created_at').eq('coachee_id', coacheeId).order('created_at'),
+      sb.from('pm_client_settings').select('*').eq('coachee_id', coacheeId).maybeSingle(),
     ]);
     // Growth tables may not exist yet on an older database; the rest of the model still loads.
     setState({ status: 'ready', findings: findings || [], evidence, history,
-      predictions: pr.data || [], interventions: iv.data || [], growthHistory: gh.data || [], runs: ru.data || [], error: null });
+      predictions: pr.data || [], interventions: iv.data || [], growthHistory: gh.data || [], runs: ru.data || [], settings: cs.data || null, error: null });
   }, [coacheeId, enabled]);
   useEffect(() => { load(); }, [load]);
 
@@ -3503,6 +3505,15 @@ function usePersonModel(coacheeId, enabled) {
     return true;
   };
 
+  // The per-client switch: whether the client's own login can open their read (pm_client_read checks it).
+  const setClientVisible = async (visible) => {
+    if (MOCK_COACH) { mock.current.settings = { ...(mock.current.settings || {}), visible, visible_changed_at: new Date().toISOString() }; await load(); return true; }
+    const { error } = await sb.from('pm_client_settings').upsert({ coachee_id: coacheeId, visible }, { onConflict: 'coachee_id' });
+    if (error) throw new Error('Could not save: ' + error.message);
+    await load();
+    return true;
+  };
+
   const byFinding = useMemo(() => {
     const ev = {}, hi = {}, gh = {};
     state.evidence.forEach(e => { (ev[e.finding_id] = ev[e.finding_id] || []).push(e); });
@@ -3512,7 +3523,7 @@ function usePersonModel(coacheeId, enabled) {
   }, [state.evidence, state.history, state.growthHistory]);
 
   return { ...state, evidenceFor: id => byFinding.ev[id] || [], historyFor: id => byFinding.hi[id] || [], growthHistoryFor: id => byFinding.gh[id] || [],
-    update, merge, updateGrowth, reload: load };
+    update, merge, updateGrowth, setClientVisible, reload: load };
 }
 
 // Every save in the person model goes through this: it can't leave buttons stuck, it gives up after 20s
@@ -4228,6 +4239,34 @@ function PmLegend() {
   );
 }
 
+// Coach-only: whether this client's own login can open their read. Off by default; the database enforces it.
+function PmClientAccess({ pm, name }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const s = pm.settings;
+  const on = !!s?.visible;
+  const toggle = async () => {
+    if (!on && !window.confirm(`Let ${name} open the read in their own login?\n\n${name} sees exactly what "Show as client" shows: confirmed findings, shared predictions and active suggestions, and is asked to agree before anything appears. You can turn it off again at any time.`)) return;
+    setBusy(true); setErr('');
+    const r = await pmAttempt(() => pm.setClientVisible(!on));
+    setBusy(false); if (!r.ok) setErr(r.error);
+  };
+  const status = !on ? `${name} can't see the read yet. Read it through in "Show as client" first, then turn it on.`
+    : s.consent_at ? `On. ${name} agreed on ${pmDate(s.consent_at)}${s.delete_requested_at ? `. ${name} asked to delete it on ${pmDate(s.delete_requested_at)}.` : '.'}`
+    : `On since ${s.visible_changed_at ? pmDate(s.visible_changed_at) : 'today'}. ${name} is asked to agree before anything shows.`;
+  return (
+    <div className="surface rounded-xl p-5 flex items-center gap-4 flex-wrap" style={{ borderLeft: `3px solid ${on ? '#34d399' : 'var(--border)'}` }}>
+      <span className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ color: on ? '#34d399' : 'var(--text-faint)', background: on ? 'rgba(52,211,153,0.12)' : 'var(--surface-2)' }}><Icon name={on ? 'users' : 'lock'} size={17} /></span>
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-sm">{name}'s own login</p>
+        <p className="text-faint text-sm mt-0.5">{status}</p>
+        <PmSaveState busy={busy} err={err} />
+      </div>
+      <button disabled={busy} onClick={toggle} className={'px-4 py-1.5 rounded-lg text-sm font-semibold shrink-0 ' + (on ? 'surface' : 'btn-primary')}>{on ? 'Turn off' : `Show ${name} the read`}</button>
+    </div>
+  );
+}
+
 function PmOverview({ data, pm, onNav, isCoach }) {
   const [clientView, setClientView] = usePmClientView();
   const [openKey, setOpenKey] = useState(null);
@@ -4291,6 +4330,8 @@ function PmOverview({ data, pm, onNav, isCoach }) {
           body={`${plural(candidates.length, 'finding')} and ${plural(proposalCount, 'growth proposal')}. Nothing reaches ${name} until you confirm it.`}
           cta="Review now →" onClick={() => onNav('/model/review')} /></div>
       )}
+
+      {!clientView && isCoach && <PmClientAccess pm={pm} name={name} />}
 
       {/* About this read */}
       <div>
@@ -4404,11 +4445,6 @@ function PmOverview({ data, pm, onNav, isCoach }) {
       </div>
 
       <PmLegend />
-
-      <p className="text-faint text-xs text-center reading">
-        {read ? `Built from ${clientView ? 'your' : `${name}'s`} sessions of ${pmDay(read.first)} to ${pmDay(read.last)}.` : ''}
-        {!clientView && read?.lastRun ? ` Last pass ${pmDate(read.lastRun)}.` : ''} Private: only {clientView ? 'you and your coach' : `${name} and you`} can see it.
-      </p>
 
       {page && (
         <PmReader accent={page.col.color} crumbs={[clientView ? 'Your read' : `${name}'s read`, page.col.title, page.sec.title]}
