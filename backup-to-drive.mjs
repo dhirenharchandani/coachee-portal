@@ -1,6 +1,7 @@
 // Daily Coachee Portal backup to Google Drive.
 // Dumps every row in public.coachees (folder, email, email_aliases, version, data)
-// plus a storage object manifest, writes a date-stamped JSON to Google Drive,
+// plus session transcripts, the person model tables (pm_*), and a storage object manifest,
+// writes a date-stamped JSON to Google Drive,
 // and prunes backups older than 30 days.
 //
 // Run manually:
@@ -66,6 +67,16 @@ console.log(`Fetched ${rows.length} coachee rows`);
 const transcripts = await sql(`SELECT folder, session_id, source, transcript_md, word_count, created_at, updated_at FROM public.session_transcripts ORDER BY folder, session_id;`);
 console.log(`Fetched ${transcripts.length} session transcripts`);
 
+// 1c. Person model: findings, their evidence and history, runs, growth items, and each client's switch / consent.
+// A table that doesn't exist yet (older database) is recorded as empty, not a failure.
+const PM_TABLES = ['pm_runs', 'pm_findings', 'pm_evidence', 'pm_finding_history', 'pm_predictions', 'pm_interventions', 'pm_growth_history', 'pm_client_settings'];
+const personModel = {};
+for (const t of PM_TABLES) {
+  try { personModel[t] = await sql(`SELECT * FROM public.${t};`); }
+  catch (e) { console.warn(`warn: ${t}: ${e.message.slice(0, 120)}`); personModel[t] = []; }
+}
+console.log(`Person model: ${PM_TABLES.map(t => `${t.replace('pm_', '')} ${personModel[t].length}`).join(', ')}`);
+
 // 2. Build a storage manifest per folder (filenames + sizes, not file contents)
 const storageManifest = {};
 for (const row of rows) {
@@ -93,6 +104,7 @@ const backup = {
   storageManifest,
   transcriptCount: transcripts.length,
   sessionTranscripts: transcripts,
+  personModel,
 };
 const json = JSON.stringify(backup, null, 2);
 const datedPath = path.join(BACKUP_DIR, `coachees-${today}.json`);

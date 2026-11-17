@@ -195,6 +195,8 @@ const sb = USE_REAL_AUTH ? window.supabase.createClient(SUPABASE_URL, SUPABASE_A
 // Only active on localhost; production ignores the ?mock query param.
 const IS_LOCALHOST = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
 const MOCK_FOLDER = IS_LOCALHOST ? new URLSearchParams(location.search).get('mock') : null;
+// Localhost preview only: ?mock=<folder>&coach=1 previews coach-only screens with data/_preview/<folder>.pm.json.
+const MOCK_COACH = !!(MOCK_FOLDER && new URLSearchParams(location.search).get('coach') === '1');
 
 /* =====================================================================
    ACTIVITY TRACKING — public.activity_events (see migrate-activity.mjs)
@@ -434,7 +436,7 @@ function useAuth() {
   useEffect(() => {
     if (MOCK_FOLDER) {
       // Localhost preview — fake an authed user, bypass Supabase auth
-      setSession({ user: { email: `preview-${MOCK_FOLDER}@local` } });
+      setSession({ user: { email: MOCK_COACH ? 'preview-coach@local' : `preview-${MOCK_FOLDER}@local` } });
       setLoading(false);
       return;
     }
@@ -945,11 +947,16 @@ const NAV = [
   // The 'FINANCE' section is appended dynamically when data.financials.enabled is true.
 ];
 
-function buildNav(data, showKpis = false, isCoach = false) {
+function buildNav(data, showKpis = false, isCoach = false, readAvailable = false) {
   const nav = NAV.map(sec => ({ ...sec, items: [...sec.items] }));
+  if (readAvailable && !isCoach) nav[0].items.splice(1, 0, { id: 'read', icon: 'map', label: 'Your Read', route: '/read' });
   if (isCoach) {
     nav.unshift({ section: 'COACH', items: [
       { id: 'engagement', icon: 'users', label: 'Engagement', route: '/engagement' },
+    ]});
+    nav.splice(1, 0, { section: 'PERSON MODEL', items: [
+      { id: 'model-overview', icon: 'map', label: 'The Model', route: '/model/overview' },
+      { id: 'model-review', icon: 'clipboard', label: 'Review Queue', route: '/model/review' },
     ]});
   }
   if (showKpis) {
@@ -969,8 +976,8 @@ function buildNav(data, showKpis = false, isCoach = false) {
   return nav;
 }
 
-function Sidebar({ activeId, onNav, onSignOut, profile, badges = {}, data, showKpis = false, isCoach = false }) {
-  const sections = useMemo(() => buildNav(data, showKpis, isCoach), [data, showKpis, isCoach]);
+function Sidebar({ activeId, onNav, onSignOut, profile, badges = {}, data, showKpis = false, isCoach = false, readAvailable = false }) {
+  const sections = useMemo(() => buildNav(data, showKpis, isCoach, readAvailable), [data, showKpis, isCoach, readAvailable]);
   return (
     <aside className="desktop-sidebar w-60 surface flex flex-col flex-shrink-0" style={{ borderRadius: 0, borderTop: 0, borderBottom: 0, borderLeft: 0 }}>
       <div className="p-5 border-b border-default">
@@ -1167,7 +1174,7 @@ function EditableYearWord({ value, onSave }) {
   );
 }
 
-function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCoach }) {
+function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCoach, readAvailable, readConsented }) {
   const lastSession = useMemo(() => [...data.sessions].reverse().find(s => s.summaryMd && !s.summaryMd.startsWith('_No recap')), [data]);
   // Dual-company support: when data.companies is set, each company has its own engagement / evolutionArc / scorecard / nextQuarter.
   // Otherwise fall back to the legacy top-level fields.
@@ -1187,6 +1194,13 @@ function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCo
       </div>
 
       {prep && <PrepCard prep={prep} isCoach={isCoach} onNav={onNav} />}
+
+      {/* The client's read, once the coach has switched it on (also the way in on mobile, which has no sidebar) */}
+      {readAvailable && (
+        <div className="grid"><CTACard icon="map" title="Your read"
+          body={readConsented ? 'What we have learned about how you operate, from our sessions. Open any part to read it, and tell us where it doesn\'t fit.' : 'Dhiren has prepared a read of how you operate, built from our sessions. Open it when you have a quiet moment.'}
+          cta={readConsented ? 'Open your read →' : 'Take a look →'} onClick={() => onNav('/read')} /></div>
+      )}
 
       {/* Hero CTAs */}
       <HeroCTAs onNav={onNav} data={data} actionItems={actionItems} />
@@ -1393,7 +1407,7 @@ function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCo
    VIEW: SESSIONS LIST + DETAIL
    ===================================================================== */
 const COACH_EMAILS = ['dhirenharchandani@gmail.com', 'dhiren@myinnergame.com'];
-const isCoachEmail = (email) => COACH_EMAILS.includes((email || '').toLowerCase().trim());
+const isCoachEmail = (email) => COACH_EMAILS.includes((email || '').toLowerCase().trim()) || (MOCK_COACH && email === 'preview-coach@local');
 
 function SessionsView({ data, onNav, route, unviewedIds = [], authedEmail }) {
   const isCoach = isCoachEmail(authedEmail);
@@ -3357,6 +3371,1608 @@ function EngagementView({ onOpen }) {
 /* =====================================================================
    APP SHELL
    ===================================================================== */
+/* =====================================================================
+   PERSON MODEL — coach-only (see person-model-framework.md)
+   One list of findings (public.pm_findings); every screen is a filtered view.
+   Tables are coach-only under RLS; the nav is also hidden for non-coach logins.
+   ===================================================================== */
+const PM_DOMAINS = {
+  drives: 'Drives', values: 'Values', beliefs: 'Beliefs', identity: 'Identity',
+  cognition: 'Cognition', emotion: 'Emotion', relationships: 'Relationships', agency: 'Agency',
+};
+const PM_TYPES = {
+  characteristic: 'Characteristic', strength: 'Strength', vulnerability: 'Vulnerability',
+  self_perception_gap: 'Self-perception gap', loop: 'Loop', connection: 'Connection',
+  conflict: 'Conflict', impact_on_others: 'Impact on others',
+};
+const PM_LENS = { my_os: 'My OS', my_insights: 'My Insights', my_growth: 'My Growth' };
+const PM_RANK = { high: 0, medium: 1, low: 2 };
+const PM_CONF_RANK = { solid: 0, live: 1, thin: 2 };
+const PM_CONF_COLOR = { thin: '#fbbf24', live: '#60a5fa', solid: '#34d399' };
+const PM_IMP_COLOR = { high: '#f87171', medium: '#a78bfa', low: 'var(--text-faint)' };
+const PM_CLASS = { direct: 'Direct', self_report: 'Self-report', inference: 'Inference' };
+const PM_STEP = { trigger: 'Trigger', interpretation: 'Interpretation', response: 'Response', feedback: 'Feedback', consequence: 'Consequence' };
+const PM_CLIENT_VISIBLE = ['confirmed', 'disputed'];
+// Fields a client sees in "What changed over time?"; review mechanics stay coach-side.
+const PM_HISTORY_CLIENT_FIELDS = ['created', 'status', 'confidence', 'scope', 'exceptions', 'statement', 'client_headline'];
+// Text fields: the client sees that the wording changed, not the earlier coach-side draft.
+const PM_HISTORY_TEXT_FIELDS = { statement: 'What happens', client_headline: 'Headline', scope: 'Where it applies', exceptions: 'Exceptions' };
+
+const PM_SECTIONS = {
+  os: [
+    { id: 'drives', title: 'What Drives Me', line: 'My needs and motives, values and priorities, beliefs, and who I take myself to be',
+      test: f => f.lens === 'my_os' && f.domains.some(d => ['drives', 'values', 'beliefs', 'identity'].includes(d)) },
+    { id: 'think', title: 'How I Think & Act', line: 'How I notice, reason, decide, feel, form habits, follow through and learn',
+      test: f => f.lens === 'my_os' && f.domains.some(d => ['cognition', 'emotion', 'agency'].includes(d)) },
+    { id: 'relationships', title: 'My Relationships', line: 'How I trust, get close, use power, set boundaries, handle conflict and repair',
+      test: f => f.lens === 'my_os' && f.domains.includes('relationships') },
+    { id: 'strengths', title: 'My Strengths & Challenges', line: 'What reliably works for me, where I struggle, and when a strength becomes a liability',
+      test: f => f.type === 'strength' || f.type === 'vulnerability' },
+  ],
+  insights: [
+    { id: 'gaps', title: 'Blind Spots & Self-Perception Gaps', line: 'Where the self I describe differs from the self I show, including how others experience me',
+      test: f => f.type === 'self_perception_gap' },
+    { id: 'loops', title: 'Self-Defeating Loops', line: 'Recurring patterns that work against my own aims, and my part in them',
+      test: f => f.type === 'loop' && f.works_against_aims },
+    { id: 'connections', title: 'Hidden Connections & Conflicts', line: 'Unexpected links or tensions between my values, motives, beliefs, identity and behaviour',
+      test: f => (f.type === 'connection' || f.type === 'conflict') && f.domains.length >= 2 },
+    { id: 'impact', title: 'Relational Impact', line: 'How my behaviour shapes trust, closeness and conflict, and where intended and actual impact differ',
+      test: f => f.type === 'impact_on_others' },
+    { id: 'unrecognised', title: 'Unrecognised Strengths & Potential', line: 'Capacities and successful patterns I undervalue or overlook',
+      test: f => f.type === 'strength' && f.client_undervalues },
+  ],
+};
+
+function usePersonModel(coacheeId, enabled) {
+  const [state, setState] = useState({ status: 'idle', findings: [], evidence: [], history: [], predictions: [], interventions: [], growthHistory: [], runs: [], settings: null, error: null });
+  const mock = useRef(null);
+  const load = useCallback(async () => {
+    if (enabled && MOCK_COACH) {
+      if (!mock.current) {
+        const r = await fetch(`data/_preview/${MOCK_FOLDER}.pm.json?t=${Date.now()}`);
+        mock.current = r.ok ? await r.json() : { findings: [], evidence: [], history: [], transcripts: {} };
+        for (const k of ['predictions', 'interventions', 'growth_history', 'runs']) mock.current[k] = mock.current[k] || [];
+        mock.current.settings = mock.current.settings || null;
+        window.__pmMock = mock.current;
+      }
+      const m = mock.current;
+      setState({ status: 'ready', findings: [...m.findings], evidence: [...m.evidence], history: [...m.history],
+        predictions: [...m.predictions], interventions: [...m.interventions], growthHistory: [...m.growth_history], runs: [...m.runs], settings: m.settings, error: null });
+      return;
+    }
+    if (!enabled || !sb || !coacheeId) return;
+    setState(s => ({ ...s, status: s.findings.length ? 'refreshing' : 'loading' }));
+    const { data: findings, error } = await sb.from('pm_findings').select('*').eq('coachee_id', coacheeId).order('code');
+    if (error) { setState(s => ({ ...s, status: 'error', error: error.message })); return; }
+    const ids = (findings || []).map(f => f.id);
+    let evidence = [], history = [];
+    if (ids.length) {
+      const [ev, hi] = await Promise.all([
+        sb.from('pm_evidence').select('*').in('finding_id', ids),
+        sb.from('pm_finding_history').select('*').in('finding_id', ids).order('changed_at'),
+      ]);
+      if (ev.error || hi.error) { setState(s => ({ ...s, status: 'error', error: (ev.error || hi.error).message })); return; }
+      evidence = ev.data || []; history = hi.data || [];
+    }
+    const [pr, iv, gh, ru, cs] = await Promise.all([
+      sb.from('pm_predictions').select('*').eq('coachee_id', coacheeId).order('code'),
+      sb.from('pm_interventions').select('*').eq('coachee_id', coacheeId).order('code'),
+      sb.from('pm_growth_history').select('*').eq('coachee_id', coacheeId).order('changed_at'),
+      sb.from('pm_runs').select('id, kind, sessions_read, created_at').eq('coachee_id', coacheeId).order('created_at'),
+      sb.from('pm_client_settings').select('*').eq('coachee_id', coacheeId).maybeSingle(),
+    ]);
+    // Growth tables may not exist yet on an older database; the rest of the model still loads.
+    setState({ status: 'ready', findings: findings || [], evidence, history,
+      predictions: pr.data || [], interventions: iv.data || [], growthHistory: gh.data || [], runs: ru.data || [], settings: cs.data || null, error: null });
+  }, [coacheeId, enabled]);
+  useEffect(() => { load(); }, [load]);
+
+  const update = async (id, patch, reason) => {
+    if (MOCK_COACH) {
+      const m = mock.current, f = m.findings.find(x => x.id === id);
+      for (const [k, v] of Object.entries(patch)) {
+        if (JSON.stringify(f[k]) !== JSON.stringify(v)) m.history.push({ id: m.history.length + 1000, finding_id: id, changed_at: new Date().toISOString(), actor: 'preview-coach@local', field: k, before: f[k], after: v, reason });
+      }
+      m.findings = m.findings.map(x => x.id === id ? { ...x, ...patch } : x);
+      await load(); return true;
+    }
+    const { error } = await sb.from('pm_findings').update({ ...patch, last_change_reason: reason || null }).eq('id', id);
+    if (error) throw new Error('Could not save: ' + error.message);
+    await load();
+    return true;
+  };
+  // Merge: the candidate's evidence moves to the surviving finding; the candidate is kept, marked merged.
+  const merge = async (fromId, intoId, reason) => {
+    const into = state.findings.find(f => f.id === intoId);
+    const from = state.findings.find(f => f.id === fromId);
+    if (MOCK_COACH) {
+      mock.current.evidence = mock.current.evidence.map(e => e.finding_id === fromId ? { ...e, finding_id: intoId } : e);
+      return update(fromId, { status: 'merged', merged_into: intoId }, reason || `Merged into ${into?.code}`);
+    }
+    const ev = await sb.from('pm_evidence').update({ finding_id: intoId }).eq('finding_id', fromId);
+    if (ev.error) throw new Error('Could not move evidence: ' + ev.error.message);
+    await sb.from('pm_findings').update({ last_change_reason: `Absorbed ${from?.code}: ${reason || 'merged in review'}`, episodes: (into?.episodes || 0) + (from?.episodes || 0) }).eq('id', intoId);
+    return update(fromId, { status: 'merged', merged_into: intoId }, reason || `Merged into ${into?.code}`);
+  };
+
+  // Predictions and interventions. The database refuses what the framework forbids (accepting on an
+  // unconfirmed finding, rewording a prediction after it was logged), so the message is shown as is.
+  const updateGrowth = async (type, id, patch, reason) => {
+    const table = type === 'prediction' ? 'pm_predictions' : 'pm_interventions';
+    if (MOCK_COACH) {
+      const m = mock.current, key = type === 'prediction' ? 'predictions' : 'interventions', it = m[key].find(x => x.id === id);
+      for (const [k, v] of Object.entries(patch)) {
+        if (JSON.stringify(it[k]) !== JSON.stringify(v)) m.growth_history.push({ id: m.growth_history.length + 5000, item_type: type, item_id: id, changed_at: new Date().toISOString(), actor: 'preview-coach@local', field: k, before: it[k], after: v, reason });
+      }
+      m[key] = m[key].map(x => x.id === id ? { ...x, ...patch, ...(patch.status === 'scored' ? { scored_at: new Date().toISOString() } : {}), ...(patch.shared_with_client ? { shared_at: new Date().toISOString() } : {}) } : x);
+      await load(); return true;
+    }
+    const { error } = await sb.from(table).update({ ...patch, last_change_reason: reason || null }).eq('id', id);
+    if (error) throw new Error('Could not save: ' + error.message.replace(/^pm_(predictions|interventions): /, ''));
+    await load();
+    return true;
+  };
+
+  // The per-client switch: whether the client's own login can open their read (pm_client_read checks it).
+  const setClientVisible = async (visible) => {
+    if (MOCK_COACH) { mock.current.settings = { ...(mock.current.settings || {}), visible, visible_changed_at: new Date().toISOString() }; await load(); return true; }
+    const { error } = await sb.from('pm_client_settings').upsert({ coachee_id: coacheeId, visible }, { onConflict: 'coachee_id' });
+    if (error) throw new Error('Could not save: ' + error.message);
+    await load();
+    return true;
+  };
+
+  const byFinding = useMemo(() => {
+    const ev = {}, hi = {}, gh = {};
+    state.evidence.forEach(e => { (ev[e.finding_id] = ev[e.finding_id] || []).push(e); });
+    state.history.forEach(h => { (hi[h.finding_id] = hi[h.finding_id] || []).push(h); });
+    state.growthHistory.forEach(h => { (gh[h.item_id] = gh[h.item_id] || []).push(h); });
+    return { ev, hi, gh };
+  }, [state.evidence, state.history, state.growthHistory]);
+
+  return { ...state, evidenceFor: id => byFinding.ev[id] || [], historyFor: id => byFinding.hi[id] || [], growthHistoryFor: id => byFinding.gh[id] || [],
+    update, merge, updateGrowth, setClientVisible, reload: load };
+}
+
+// Every save in the person model goes through this: it can't leave buttons stuck, it gives up after 20s
+// with a clear message, and the caller shows the error in the panel instead of failing silently.
+async function pmAttempt(fn, ms = 20000) {
+  let t;
+  try {
+    const ok = await Promise.race([fn(), new Promise((_, rej) => { t = setTimeout(() => rej(new Error('No response from the server after 20 seconds. Reload the page and try again. If it keeps happening, sign out and back in.')), ms); })]);
+    return { ok: ok !== false };
+  } catch (e) {
+    console.error('[person model]', e);
+    return { ok: false, error: (e && e.message) || String(e) };
+  } finally { clearTimeout(t); }
+}
+function PmSaveState({ busy, err }) {
+  if (busy) return <span className="text-xs text-faint">Saving…</span>;
+  if (err) return <span className="text-xs w-full" style={{ color: '#f87171' }}>{err}</span>;
+  return null;
+}
+
+function usePmClientView() {
+  const [on, setOn] = useState(() => { try { return localStorage.getItem('ig-pm-client-view') === '1'; } catch { return false; } });
+  const set = (v) => { setOn(v); try { localStorage.setItem('ig-pm-client-view', v ? '1' : '0'); } catch {} };
+  return [on, set];
+}
+
+function pmSessionLabel(data, sessionId) {
+  const s = (data.sessions || []).find(x => x.id === sessionId);
+  if (!s) return sessionId;
+  const d = new Date(s.date + 'T12:00:00');
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function pmDate(ts) { return new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); }
+
+function PmChip({ children, color, title }) {
+  return (
+    <span title={title} className="text-[10px] font-semibold tracking-wider px-2 py-0.5 rounded-full uppercase"
+      style={{ color: color || 'var(--text-dim)', border: '1px solid ' + (color && color.startsWith('#') ? color + '66' : 'var(--border)'), background: color && color.startsWith('#') ? color + '14' : 'transparent' }}>
+      {children}
+    </span>
+  );
+}
+
+function PmHeader({ eyebrow, title, sub, clientView, setClientView, isCoach }) {
+  return (
+    <div className="mb-8">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-faint text-xs tracking-[0.2em] mb-2">{eyebrow}</p>
+          <h1 className="text-3xl font-bold mb-2">{title}</h1>
+          {sub && <p className="text-dim reading" style={{ fontSize: '15px' }}>{sub}</p>}
+        </div>
+        {isCoach && (
+          <button onClick={() => setClientView(!clientView)}
+            className={'px-3 py-1.5 rounded-lg text-sm inline-flex items-center gap-2 shrink-0 ' + (clientView ? 'btn-primary' : 'surface hover:bg-primary-soft')}>
+            <Icon name={clientView ? 'users' : 'lock'} size={15} /> {clientView ? 'Showing as client' : 'Show as client'}
+          </button>
+        )}
+      </div>
+      {clientView && (
+        <p className="text-xs text-faint mt-3">Client view: confirmed findings only. Coach-only details are hidden. Clients cannot open this page themselves.</p>
+      )}
+    </div>
+  );
+}
+
+// Shows a quote in the context of its transcript (coach-only table; the coach is driving the screen).
+function PmTranscriptContext({ evidence }) {
+  const [ctx, setCtx] = useState(null);
+  useEffect(() => {
+    let off = false;
+    const fetchT = MOCK_COACH
+      ? Promise.resolve({ data: { transcript_md: (window.__pmMock?.transcripts || {})[evidence.transcript_id] || '' } })
+      : sb.from('session_transcripts').select('transcript_md').eq('id', evidence.transcript_id).maybeSingle();
+    fetchT.then(({ data: r }) => {
+      if (off || !r) return;
+      const flat = r.transcript_md.replace(/\*/g, '').replace(/\s+/g, ' ');
+      const i = flat.indexOf(evidence.quote);
+      if (i < 0) { setCtx({ moved: true }); return; }
+      setCtx({ before: flat.slice(Math.max(0, i - 420), i), after: flat.slice(i + evidence.quote.length, i + evidence.quote.length + 420), start: i > 420 });
+    });
+    return () => { off = true; };
+  }, [evidence.id]);
+  if (!ctx) return <p className="text-faint text-xs mt-2">Loading transcript…</p>;
+  if (ctx.moved) return <p className="text-secondary text-xs mt-2">This quote no longer matches the stored transcript. The transcript was changed after the finding was saved.</p>;
+  return (
+    <p className="text-xs text-dim mt-2 reading" style={{ fontSize: '13px', lineHeight: 1.6 }}>
+      {ctx.start && '… '}{ctx.before}<mark style={{ background: 'var(--primary-soft)', color: 'var(--text)', padding: '0 2px' }}>{evidence.quote}</mark>{ctx.after} …
+    </p>
+  );
+}
+
+function PmHistory({ items, clientView, findings }) {
+  // The client's history starts when the coach confirmed it; drafting before that is review work, not change in them.
+  const confirmedAt = items.find(h => h.field === 'status' && h.after === 'confirmed')?.changed_at;
+  const shown = clientView
+    ? items.filter(h => h.field === 'created' || (confirmedAt && h.changed_at >= confirmedAt && PM_HISTORY_CLIENT_FIELDS.includes(h.field)))
+    : items;
+  if (!shown.length) return <p className="text-faint text-sm">No changes recorded yet.</p>;
+  const fmt = (v) => {
+    if (v === null || v === undefined) return '—';
+    if (typeof v === 'string') { const m = findings.find(f => f.id === v); return m ? m.code : v; }
+    return Array.isArray(v) ? v.join(', ') : JSON.stringify(v);
+  };
+  return (
+    <ol className="space-y-2">
+      {shown.map(h => (
+        <li key={h.id} className="text-sm flex gap-3">
+          <span className="text-faint text-xs shrink-0 pt-0.5" style={{ minWidth: 86 }}>{pmDate(h.changed_at)}</span>
+          <span className="text-dim">
+            {h.field === 'created' ? 'First proposed'
+              : clientView && PM_HISTORY_TEXT_FIELDS[h.field] ? <><strong className="text-[var(--text)]">{PM_HISTORY_TEXT_FIELDS[h.field]}</strong>: wording updated</>
+              : <><strong className="text-[var(--text)]">{h.field.replace(/_/g, ' ')}</strong>: {fmt(h.before)} → {fmt(h.after)}</>}
+            {h.reason && !clientView && <span className="text-faint"> · {h.reason}</span>}
+            {!clientView && <span className="text-faint"> · {h.actor}</span>}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+// Layout follows "The Read": one overview (three columns of section cards), and a reader that opens over it
+// with a breadcrumb and previous / next, so the model is read like a document rather than a database.
+const PM_COLUMNS = [
+  { id: 'os', title: 'My OS', line: 'What drives you and how you operate', icon: 'map', color: '#60a5fa' },
+  { id: 'insights', title: 'My Insights', line: 'What you may be learning about yourself', icon: 'sparkles', color: '#a78bfa' },
+  { id: 'growth', title: 'My Growth', line: 'How you could change and grow', icon: 'trending', color: '#34d399' },
+];
+const PM_GROWTH_SECTIONS = [
+  { id: 'prediction', title: 'Prediction', line: 'What I may do in an upcoming situation, under which conditions, and how sure that is' },
+  { id: 'nudges', title: 'Nudges', line: 'Short, optional prompts to prepare, interrupt an unhelpful response or reinforce a helpful one' },
+  { id: 'interventions', title: 'Optimisation / Interventions', line: 'Specific changes that fit how I operate, and how we will know they helped' },
+  { id: 'evolution', title: 'My Evolution', line: 'Meaningful changes in my behaviour and results' },
+];
+const pmSort = (a, b) => PM_RANK[a.importance] - PM_RANK[b.importance] || PM_CONF_RANK[a.confidence] - PM_CONF_RANK[b.confidence] || a.code.localeCompare(b.code);
+const pmHeadline = (f) => f.confidence === 'thin' ? (f.client_question || f.client_headline) : f.client_headline;
+
+// Pages the reader can step through, in overview order. Empty sections get a page of their own,
+// so "nothing here" is stated rather than hidden.
+// Each finding is shown in exactly one place, so the overview never repeats itself.
+// Type decides first (the My Insights kinds, then strengths and challenges); otherwise the owning
+// domain, which the pass lists first, picks the My OS section.
+function pmPlace(f) {
+  if (f.type === 'self_perception_gap') return 'insights/gaps';
+  if (f.type === 'loop' && f.works_against_aims) return 'insights/loops';
+  if ((f.type === 'connection' || f.type === 'conflict') && f.domains.length >= 2) return 'insights/connections';
+  if (f.type === 'impact_on_others') return 'insights/impact';
+  if (f.type === 'strength' && f.client_undervalues) return 'insights/unrecognised';
+  if (f.type === 'strength' || f.type === 'vulnerability') return 'os/strengths';
+  const d = f.domains[0];
+  if (d === 'relationships') return 'os/relationships';
+  if (['cognition', 'emotion', 'agency'].includes(d)) return 'os/think';
+  return 'os/drives';
+}
+const pmIn = (col, sec) => f => pmPlace(f) === `${col.id}/${sec.id}`;
+
+function pmPages(findings, growth) {
+  const pages = [];
+  for (const col of PM_COLUMNS) {
+    const secs = col.id === 'growth' ? PM_GROWTH_SECTIONS : PM_SECTIONS[col.id];
+    for (const sec of secs) {
+      if (col.id === 'growth') {
+        if (sec.id === 'evolution') { pages.push({ key: 'growth/evolution', col, sec, evolution: growth.evolution }); continue; }
+        const items = growth[sec.id];
+        if (!items.length) pages.push({ key: `${col.id}/${sec.id}`, col, sec, f: null });
+        items.forEach((g, i) => pages.push({ key: `${col.id}/${sec.id}/${g.id}`, col, sec, g, gType: sec.id === 'prediction' ? 'prediction' : 'intervention', n: i + 1, of: items.length }));
+        continue;
+      }
+      const items = findings.filter(pmIn(col, sec)).sort(pmSort);
+      if (!items.length) pages.push({ key: `${col.id}/${sec.id}`, col, sec, f: null });
+      items.forEach((f, i) => pages.push({ key: `${col.id}/${sec.id}/${f.id}`, col, sec, f, n: i + 1, of: items.length }));
+    }
+  }
+  return pages;
+}
+
+// ── Growth: predictions, nudges, interventions, My Evolution ──
+// Proposals wait in the Review Queue. Accepted items show in the Growth column. The client view shows an
+// intervention once it is active and its finding is confirmed, and a prediction only once the coach has
+// shared it (a prediction shared before the event can change the event).
+const PM_KIND = { nudge: 'Nudge', practice: 'Practice', experiment: 'Experiment' };
+const PM_OUTCOME = { hit: 'Happened as expected', miss: 'Did not happen as expected', partial: 'Partly as expected', not_testable: 'Could not tell' };
+const PM_OUTCOME_COLOR = { hit: '#34d399', miss: '#f87171', partial: '#fbbf24', not_testable: 'var(--text-faint)' };
+const PM_CONF_WORDS = { thin: 'a question to test', live: 'reasonably sure', solid: 'sure' };
+const pmLive = f => f && PM_CLIENT_VISIBLE.includes(f.status);
+const pmFindingsOf = (pm, p) => (p.finding_ids || []).map(id => pm.findings.find(f => f.id === id)).filter(Boolean);
+const pmShortDate = (d) => new Date(d + (d.length === 10 ? 'T12:00:00' : '')).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+
+function pmGrowth(pm, clientView) {
+  const preds = pm.predictions.filter(p => ['open', 'scored'].includes(p.status)
+    && (!clientView || (p.shared_with_client && pmFindingsOf(pm, p).every(pmLive))))
+    .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || a.situation_date.localeCompare(b.situation_date));
+  const ints = pm.interventions.filter(i => ['active', 'done'].includes(i.status) && pmLive(pm.findings.find(f => f.id === i.finding_id)))
+    .sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1) || a.code.localeCompare(b.code));
+  return { prediction: preds, nudges: ints.filter(i => i.kind === 'nudge'), interventions: ints.filter(i => i.kind !== 'nudge'), evolution: pmEvolution(pm) };
+}
+
+// My Evolution: changes to confirmed findings after they were confirmed, newest first.
+function pmEvolution(pm) {
+  const out = [];
+  for (const f of pm.findings.filter(f => pmLive(f) || f.status === 'closed')) {
+    const hist = pm.historyFor(f.id);
+    const confirmedAt = hist.find(h => h.field === 'status' && h.after === 'confirmed')?.changed_at;
+    if (!confirmedAt) continue;
+    for (const h of hist) {
+      if (h.changed_at <= confirmedAt) continue;
+      let text = null;
+      if (h.field === 'confidence') text = `How sure: ${PM_CONF_WORDS[h.before] || h.before} → ${PM_CONF_WORDS[h.after] || h.after}`;
+      else if (h.field === 'scope') text = 'Where it applies was updated';
+      else if (h.field === 'exceptions') text = 'A new exception was added';
+      else if (h.field === 'status' && h.after === 'closed') text = 'You have changed this. It no longer describes how you operate.';
+      if (text) out.push({ id: h.id, at: h.changed_at, f, text });
+    }
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at));
+}
+
+function PmGrowthTitle({ g, type, clientView, color, eyebrow }) {
+  return (
+    <div className="mb-8">
+      <PmEyebrow color={color}>{eyebrow}</PmEyebrow>
+      <div className="flex items-center gap-2 flex-wrap mb-3">
+        {type === 'prediction'
+          ? (g.status === 'scored' ? <PmChip color={PM_OUTCOME_COLOR[g.outcome]}>{PM_OUTCOME[g.outcome]}</PmChip> : <PmChip color="#60a5fa">For {pmShortDate(g.situation_date)}</PmChip>)
+          : <><PmChip color="#34d399">{PM_KIND[g.kind]}</PmChip>{g.status === 'done' && <PmChip>Done</PmChip>}</>}
+        {!clientView && <>
+          <span className="text-faint text-xs font-mono">{g.code}</span>
+          {!['open', 'active', 'scored', 'done'].includes(g.status) && <PmChip color="var(--secondary)">{g.status}</PmChip>}
+          {type === 'prediction' && <PmChip color={g.shared_with_client ? '#a78bfa' : 'var(--text-faint)'} title="A prediction shared before the event can change it">{g.shared_with_client ? 'Shared with client' : 'Not shared'}</PmChip>}
+        </>}
+      </div>
+      <h2 className="text-2xl font-bold leading-snug">{type === 'prediction' ? g.situation : g.opportunity}</h2>
+    </div>
+  );
+}
+
+function PmBasedOn({ findings, clientView }) {
+  if (!findings.length) return null;
+  return (
+    <PmBlock title="Based on">
+      <ul className="space-y-1">
+        {findings.map(f => <li key={f.id}>{!clientView && <span className="text-faint text-xs font-mono mr-2">{f.code}</span>}{pmHeadline(f)}{!clientView && !pmLive(f) && <span className="text-faint"> ({f.status})</span>}</li>)}
+      </ul>
+    </PmBlock>
+  );
+}
+
+function PmGrowthHistory({ items }) {
+  if (!items.length) return null;
+  return (
+    <section className="mb-7">
+      <PmEyebrow>History</PmEyebrow>
+      <ol className="space-y-1.5">
+        {items.map(h => (
+          <li key={h.id} className="text-sm flex gap-3">
+            <span className="text-faint text-xs shrink-0 pt-0.5" style={{ minWidth: 86 }}>{pmDate(h.changed_at)}</span>
+            <span className="text-dim">{h.field === 'created' ? 'Proposed' : <><strong className="text-[var(--text)]">{h.field.replace(/_/g, ' ')}</strong>: {String(h.before ?? '—')} → {String(h.after ?? '—')}</>}
+              {h.reason && <span className="text-faint"> · {h.reason}</span>}<span className="text-faint"> · {h.actor}</span></span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function PmPredictionBody({ p, pm, clientView }) {
+  return (
+    <>
+      <PmBlock title="When"><p>By {pmDate(p.situation_date + 'T12:00:00')}. Written down on {pmDate(p.created_at)}, before it happened.</p></PmBlock>
+      <PmBlock title="What we expect"><p>{p.expected}</p></PmBlock>
+      <PmBlock title="What would make it more or less likely"><p>{p.conditions}</p></PmBlock>
+      <PmBlock title="What would show it was wrong"><p>{p.wrong_if}</p></PmBlock>
+      {p.involves_others && <PmBlock title="How sure"><p>Less sure than usual: part of it depends on how someone else responds, and the model is only about you.</p></PmBlock>}
+      <PmBasedOn findings={pmFindingsOf(pm, p)} clientView={clientView} />
+      <PmBlock title="What happened">
+        {p.status === 'scored'
+          ? <><p><strong className="text-[var(--text)]">{PM_OUTCOME[p.outcome]}.</strong> {p.outcome_note}</p>
+              {!clientView && p.shared_with_client && <p className="text-faint text-sm mt-2">Shared with the client before the event, so a hit is not counted as unassisted.</p>}
+              {!clientView && p.outcome === 'miss' && <p className="text-faint text-sm mt-2">A miss should lower the finding's confidence or add an exception to its scope. Update the finding it rests on.</p>}</>
+          : <p>Not known yet.</p>}
+      </PmBlock>
+      {!clientView && <PmGrowthHistory items={pm.growthHistoryFor(p.id)} />}
+    </>
+  );
+}
+
+function PmInterventionBody({ i, pm, clientView }) {
+  const f = pm.findings.find(x => x.id === i.finding_id);
+  return (
+    <>
+      <PmBlock title="When"><p>{i.point_of_change}</p></PmBlock>
+      <PmBlock title="What to do"><p>{i.action}</p></PmBlock>
+      <PmBlock title="What should improve"><p>{i.intended_benefit}</p></PmBlock>
+      <PmBlock title="How we'll know it helped"><p>{i.how_we_know}</p></PmBlock>
+      <PmBasedOn findings={f ? [f] : []} clientView={clientView} />
+      <PmBlock title="What happened"><p>{i.result || (i.status === 'active' ? 'Under way. Nothing recorded yet.' : 'Not started.')}</p></PmBlock>
+      {!clientView && <PmGrowthHistory items={pm.growthHistoryFor(i.id)} />}
+    </>
+  );
+}
+
+function PmEvolutionBody({ entries, clientView }) {
+  return (
+    <>
+      <PmBlock title="What this shows"><p>Meaningful changes in your behaviour and results, newest first. One good week is an exception; a change is counted when the old pattern stops showing up across several occasions.</p></PmBlock>
+      <section className="mb-7">
+        <PmEyebrow>Changes</PmEyebrow>
+        {entries.length === 0
+          ? <p className="reading text-dim" style={{ fontSize: '16px' }}>{clientView ? 'Nothing yet. This fills in as what we have found together changes over time.' : 'No change to a confirmed finding since it was confirmed.'}</p>
+          : <ol className="space-y-3">
+              {entries.map(e => (
+                <li key={e.id} className="flex gap-3">
+                  <span className="text-faint text-xs shrink-0 pt-1" style={{ minWidth: 86 }}>{pmDate(e.at)}</span>
+                  <div><p className="text-[var(--text)]">{pmHeadline(e.f)}</p><p className="text-dim text-sm">{e.text}</p></div>
+                </li>
+              ))}
+            </ol>}
+      </section>
+    </>
+  );
+}
+
+// Coach actions on accepted items, shown in the reader footer (never in client view).
+function PmGrowthActions({ g, type, pm, data }) {
+  const [mode, setMode] = useState(null);
+  const [outcome, setOutcome] = useState('');
+  const [note, setNote] = useState('');
+  const [sessionId, setSessionId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const run = async (fn) => { setBusy(true); setErr(''); const r = await pmAttempt(fn); setBusy(false); if (r.ok) { setMode(null); setNote(''); } else setErr(r.error); };
+  const sessions = (data.sessions || []).filter(s => s.date >= (g.created_at || '').slice(0, 10)).slice(-8);
+  if (type === 'prediction') {
+    if (g.status !== 'open') return <p className="text-faint text-xs">Scored{g.scored_at ? ` on ${pmDate(g.scored_at)}` : ''}. A scored prediction stays as it is.</p>;
+    return (
+      <div>
+        {mode === 'score' && (
+          <div className="mb-3 space-y-2">
+            <div className="flex gap-2 flex-wrap">
+              {Object.entries(PM_OUTCOME).map(([k, v]) => <button key={k} onClick={() => setOutcome(k)} className={'px-3 py-1.5 rounded-lg text-sm ' + (outcome === k ? 'btn-primary' : 'surface')}>{v}</button>)}
+            </div>
+            <textarea className="input" rows={2} placeholder="What happened, in a sentence" value={note} onChange={e => setNote(e.target.value)} />
+            <select className="input" value={sessionId} onChange={e => setSessionId(e.target.value)}>
+              <option value="">Session where it came up (optional)</option>
+              {sessions.map(s => <option key={s.id} value={s.id}>{s.displayDate || s.date} · {s.shortTitle || s.title}</option>)}
+            </select>
+            <button disabled={busy || !outcome || !note.trim()} onClick={() => run(() => pm.updateGrowth('prediction', g.id, { status: 'scored', outcome, outcome_note: note.trim(), outcome_session_id: sessionId || null }, 'Scored by coach'))}
+              className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold" style={{ opacity: outcome && note.trim() ? 1 : 0.5 }}>Save score</button>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2 items-center">
+          <button disabled={busy} onClick={() => setMode(mode === 'score' ? null : 'score')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'score' ? 'btn-primary' : 'surface')}>Score it</button>
+          {!g.shared_with_client && <button disabled={busy} onClick={() => run(() => pm.updateGrowth('prediction', g.id, { shared_with_client: true }, 'Shared with the client'))} className="surface px-3 py-1.5 rounded-lg text-sm">Mark as shared with client</button>}
+          <PmSaveState busy={busy} err={err} />
+          <span className="text-faint text-xs ml-auto hidden md:inline">{g.shared_with_client ? 'Shared: the client sees it' : 'Not shared: the client does not see it'}</span>
+        </div>
+      </div>
+    );
+  }
+  if (!['active'].includes(g.status)) return <p className="text-faint text-xs">{g.status === 'done' ? 'Done.' : g.status}</p>;
+  return (
+    <div>
+      {mode && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <textarea autoFocus className="input flex-1" rows={2} style={{ minWidth: 220 }} placeholder={mode === 'done' ? 'What happened, and did it help?' : 'Why drop it?'} value={note} onChange={e => setNote(e.target.value)} />
+          <button disabled={busy || !note.trim()} onClick={() => run(() => pm.updateGrowth('intervention', g.id, mode === 'done' ? { status: 'done', result: note.trim() } : { status: 'dropped', result: note.trim() }, mode === 'done' ? 'Result recorded by coach' : 'Dropped by coach'))}
+            className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold" style={{ opacity: note.trim() ? 1 : 0.5 }}>{mode === 'done' ? 'Save and mark done' : 'Drop'}</button>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 items-center">
+        <button disabled={busy} onClick={() => setMode(mode === 'done' ? null : 'done')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'done' ? 'btn-primary' : 'surface')}>Record result</button>
+        <button disabled={busy} onClick={() => setMode(mode === 'drop' ? null : 'drop')} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Drop</button>
+        <PmSaveState busy={busy} err={err} />
+        <span className="text-faint text-xs ml-auto hidden md:inline">Active: the client sees it</span>
+      </div>
+    </div>
+  );
+}
+
+// One Growth section on the overview: predictions, nudges, interventions, or My Evolution.
+// "N to review": goes straight to this section's items in the Review Queue, first one open.
+// A chip sits inside a card that is itself a button, so the click must not also open the card.
+function PmReviewLink({ n, to, onNav, chip }) {
+  const go = (e) => { e.stopPropagation(); onNav(to); };
+  if (chip) return <span role="link" tabIndex={0} onClick={go} onKeyDown={e => e.key === 'Enter' && go(e)} className="cursor-pointer hover:underline shrink-0 whitespace-nowrap"><PmChip color="#d97706">{n} to review →</PmChip></span>;
+  return <button onClick={go} className="text-[11px] mt-2 hover:underline" style={{ color: '#d97706' }}>+ {n} waiting for review →</button>;
+}
+
+function PmGrowthCard({ sec, col, items, waiting, clientView, open, onNav }) {
+  const isEvo = sec.id === 'evolution';
+  if (!items.length) return (
+    <button onClick={() => open(isEvo ? 'growth/evolution' : `growth/${sec.id}`)} className="text-left rounded-xl p-3.5 hover:bg-primary-soft transition" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--border)' }}>
+      <p className="font-semibold text-sm">{sec.title}</p>
+      <p className="text-faint text-xs mt-1 leading-relaxed">{sec.line}</p>
+      <div className="flex gap-2 mt-2 flex-wrap">
+        <PmChip>Not yet</PmChip>
+        {waiting > 0 && <PmReviewLink n={waiting} to={`/model/review/growth/${sec.id}`} onNav={onNav} chip />}
+      </div>
+    </button>
+  );
+  return (
+    <div className="rounded-xl p-3.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${col.color}` }}>
+      <p className="font-semibold text-sm mb-2">{sec.title}</p>
+      <div className="space-y-1.5">
+        {isEvo
+          ? <button onClick={() => open('growth/evolution')} className="w-full text-left rounded-lg px-2.5 py-2 hover:bg-primary-soft transition" style={{ border: '1px solid var(--border)' }}>
+              {items.slice(0, 3).map(e => <p key={e.id} className="text-sm leading-snug mb-1"><span className="text-faint text-xs mr-2">{pmDate(e.at)}</span>{e.text}</p>)}
+              {items.length > 3 && <p className="text-faint text-xs">+ {items.length - 3} more</p>}
+            </button>
+          : items.map(g => (
+            <button key={g.id} onClick={() => open(`growth/${sec.id}/${g.id}`)} className="w-full text-left rounded-lg px-2.5 py-2 hover:bg-primary-soft transition" style={{ border: '1px solid var(--border)' }}>
+              <p className="text-sm leading-snug">{sec.id === 'prediction' ? g.situation : g.opportunity}</p>
+              <div className="flex gap-1.5 mt-1.5 flex-wrap items-center">
+                {sec.id === 'prediction'
+                  ? (g.status === 'scored' ? <PmChip color={PM_OUTCOME_COLOR[g.outcome]}>{PM_OUTCOME[g.outcome]}</PmChip> : <PmChip color="#60a5fa">For {pmShortDate(g.situation_date)}</PmChip>)
+                  : <PmChip color="#34d399">{PM_KIND[g.kind]}{g.status === 'done' ? ' · done' : ''}</PmChip>}
+                {!clientView && <span className="text-faint text-[10px] font-mono">{g.code}</span>}
+                {!clientView && sec.id === 'prediction' && !g.shared_with_client && <PmChip>Not shared</PmChip>}
+              </div>
+            </button>
+          ))}
+      </div>
+      {waiting > 0 && <PmReviewLink n={waiting} to={`/model/review/growth/${sec.id}`} onNav={onNav} />}
+    </div>
+  );
+}
+
+// Review of proposals. Accept is offered only when the database would allow it.
+function PmGrowthReviewActions({ g, type, pm, onDone }) {
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const fs = type === 'prediction' ? pmFindingsOf(pm, g) : [pm.findings.find(f => f.id === g.finding_id)].filter(Boolean);
+  const blockers = fs.filter(f => f.status !== 'confirmed' || (type === 'prediction' && !['live', 'solid'].includes(f.confidence)));
+  const [err, setErr] = useState('');
+  const run = async (fn) => { setBusy(true); setErr(''); const r = await pmAttempt(fn); setBusy(false); if (r.ok) onDone(); else setErr(r.error); };
+  return (
+    <div>
+      {rejecting && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <input autoFocus className="input flex-1" style={{ minWidth: 220 }} placeholder="Why? (kept with the record)" value={reason} onChange={e => setReason(e.target.value)} />
+          <button disabled={busy || !reason.trim()} onClick={() => run(() => pm.updateGrowth(type, g.id, { status: 'rejected', reject_reason: reason.trim() }, reason.trim()))}
+            className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#f87171', color: 'white', opacity: reason.trim() ? 1 : 0.5 }}>Reject</button>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 items-center">
+        <button disabled={busy || blockers.length > 0} onClick={() => run(() => pm.updateGrowth(type, g.id, { status: type === 'prediction' ? 'open' : 'active' }, 'Accepted by coach'))}
+          className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold" style={{ opacity: blockers.length ? 0.45 : 1 }}>Accept</button>
+        <button disabled={busy} onClick={() => setRejecting(!rejecting)} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Reject</button>
+        <PmSaveState busy={busy} err={err} />
+        <span className="text-faint text-xs ml-auto">
+          {blockers.length
+            ? `Confirm ${blockers.map(f => f.code).join(', ')} first${type === 'prediction' && blockers.some(f => !['live', 'solid'].includes(f.confidence)) ? ' (predictions need Live or Solid)' : ''}`
+            : type === 'prediction' ? 'Accepting logs it. Its wording is then fixed; share it separately.' : 'Accepting shows it to the client.'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function PmEyebrow({ children, color }) {
+  return <p className="text-[10px] tracking-[0.2em] uppercase mb-2" style={{ color: color || 'var(--text-faint)' }}>{children}</p>;
+}
+function PmBlock({ title, children }) {
+  if (!children) return null;
+  return (
+    <section className="mb-7">
+      <PmEyebrow>{title}</PmEyebrow>
+      <div className="reading text-dim" style={{ fontSize: '16px' }}>{children}</div>
+    </section>
+  );
+}
+
+function PmCoachChips({ f }) {
+  return <>
+    <span className="text-faint text-xs font-mono">{f.code}</span>
+    <PmChip color={PM_IMP_COLOR[f.importance]} title="Importance">{f.importance}</PmChip>
+    <PmChip>{PM_TYPES[f.type]}</PmChip>
+    {f.coach_framed && <PmChip color="#fbbf24" title="The frame came from the coach">Coach-framed</PmChip>}
+    {!PM_CLIENT_VISIBLE.includes(f.status) && <PmChip color="var(--secondary)">{f.status}</PmChip>}
+  </>;
+}
+
+// "How sure", spelled out from what the record stores (confidence, episodes, scope).
+function pmHowSure(f) {
+  const n = f.episodes || 0;
+  const seen = n <= 1 ? 'one occasion so far' : n === 2 ? 'two separate occasions' : `${n} separate occasions`;
+  return [
+    ['That it happens', `seen on ${seen}.`],
+    ['That it recurs', f.confidence === 'solid' ? 'sure: seen in more than one setting, with known exceptions.'
+      : f.confidence === 'live' ? 'reasonably sure, though another explanation still stands.'
+      : 'low. Treat this as a question to test, not a conclusion.'],
+    ['Where it applies', f.scope ? 'described above.' : 'not yet narrowed.'],
+    ['Why it happens', 'a working explanation, not yet tested.'],
+  ];
+}
+
+function PmQuote({ e, data, clientView }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-5 pl-4" style={{ borderLeft: `2px solid ${e.is_counter ? 'var(--border)' : 'var(--secondary)'}` }}>
+      <p className="reading italic" style={{ fontSize: '16px', lineHeight: 1.6, color: 'var(--text)' }}>"{e.quote}"</p>
+      <div className="flex items-center gap-2 flex-wrap mt-2">
+        <span className="text-faint text-xs">{pmSessionLabel(data, e.session_id)}</span>
+        <PmChip>{PM_CLASS[e.class] || e.class}</PmChip>
+        {!clientView && e.speaker !== 'client' && <PmChip color="#fbbf24">{e.speaker}</PmChip>}
+        {!clientView && e.episode && <span className="text-faint text-xs">· {e.episode}</span>}
+        {/* The transcript can hold material kept off the client's board, so context is coach-only. */}
+        {!clientView && <button onClick={() => setOpen(!open)} className="text-xs text-primary ml-auto">{open ? 'Hide context' : 'Open in transcript'}</button>}
+      </div>
+      {open && <PmTranscriptContext evidence={e} />}
+    </div>
+  );
+}
+
+function PmFindingBody({ f, pm, data, clientView }) {
+  const ev = pm.evidenceFor(f.id);
+  const support = ev.filter(e => !e.is_counter).sort((a, b) => a.session_id.localeCompare(b.session_id));
+  const counter = ev.filter(e => e.is_counter);
+  const sessions = new Set(support.map(e => e.session_id)).size;
+  const seq = Array.isArray(f.pattern_sequence) ? f.pattern_sequence : [];
+  const result = seq.find(s => s.step === 'consequence');
+  return (
+    <>
+      <PmBlock title="What happens">
+        <p>{f.statement}</p>
+        {seq.length > 0 && (
+          <ol className="mt-4 space-y-2" style={{ fontFamily: 'inherit' }}>
+            {seq.map((s, i) => (
+              <li key={i} className="flex gap-3 text-[15px]">
+                <span className="text-faint shrink-0" style={{ minWidth: 118 }}>{i + 1}. {PM_STEP[s.step] || s.step}</span>
+                <span className="flex-1">{s.text}</span>
+                {!clientView && <span className="text-[10px] uppercase tracking-wider shrink-0 pt-1" style={{ color: s.basis === 'observed' ? '#34d399' : s.basis === 'inferred' ? '#fbbf24' : 'var(--text-faint)' }}>{s.basis}</span>}
+              </li>
+            ))}
+          </ol>
+        )}
+      </PmBlock>
+
+      <section className="mb-7">
+        <PmEyebrow>When it happened</PmEyebrow>
+        <p className="reading text-dim mb-3" style={{ fontSize: '16px' }}>
+          Seen in {f.episodes || 0} separate situation{f.episodes === 1 ? '' : 's'}, across {sessions} session{sessions === 1 ? '' : 's'}. In your own words:
+        </p>
+        {support.map(e => <PmQuote key={e.id} e={e} data={data} clientView={clientView} />)}
+      </section>
+
+      <PmBlock title="What explains it">
+        <p>{f.mechanism || 'Not yet worked out.'}</p>
+        {f.alternative && <p className="mt-3"><span className="text-[var(--text)]">Another explanation: </span>{f.alternative}</p>}
+      </PmBlock>
+
+      <section className="mb-7">
+        <PmEyebrow>When it does not apply</PmEyebrow>
+        <div className="reading text-dim" style={{ fontSize: '16px' }}>
+          {f.scope && <p><span className="text-[var(--text)]">Where it applies: </span>{f.scope}</p>}
+          <p className="mt-2"><span className="text-[var(--text)]">Exceptions: </span>{f.exceptions || 'None known yet. A pattern with no known exceptions has usually not been tested.'}</p>
+          <p className="mt-2"><span className="text-[var(--text)]">Where it did not hold: </span>{f.counter_evidence}</p>
+        </div>
+        {counter.length > 0 && <div className="mt-3">{counter.map(e => <PmQuote key={e.id} e={e} data={data} clientView={clientView} />)}</div>}
+      </section>
+
+      {result && <PmBlock title="What resulted"><p>{result.text}</p></PmBlock>}
+
+      <section className="mb-7">
+        <PmEyebrow>How sure</PmEyebrow>
+        <ul className="reading text-dim space-y-1" style={{ fontSize: '16px' }}>
+          {pmHowSure(f).map(([k, v]) => <li key={k}><span className="text-[var(--text)]">{k}: </span>{v}</li>)}
+        </ul>
+      </section>
+
+      <section className="mb-7">
+        <PmEyebrow>What changed over time</PmEyebrow>
+        <PmHistory items={pm.historyFor(f.id)} clientView={clientView} findings={pm.findings} />
+      </section>
+
+      <PmBlock title="What could help">
+        {(() => {
+          const ints = pm.interventions.filter(i => i.finding_id === f.id && (clientView ? ['active', 'done'].includes(i.status) : i.status !== 'rejected'));
+          const preds = clientView ? [] : pm.predictions.filter(p => (p.finding_ids || []).includes(f.id) && p.status !== 'rejected');
+          if (!ints.length && !preds.length) return <p>Nothing is linked to this yet. Practices and experiments are chosen together in session.</p>;
+          return <ul className="space-y-2">
+            {ints.map(i => <li key={i.id}><span className="text-[var(--text)]">{PM_KIND[i.kind]}: </span>{i.action}{!clientView && <span className="text-faint text-sm"> ({i.code}, {i.status})</span>}</li>)}
+            {preds.map(p => <li key={p.id}><span className="text-[var(--text)]">Prediction: </span>{p.situation}<span className="text-faint text-sm"> ({p.code}, {p.status})</span></li>)}
+          </ul>;
+        })()}
+      </PmBlock>
+
+      {!clientView && (
+        <section className="rounded-xl p-4 mb-2" style={{ border: '1px dashed var(--border)' }}>
+          <PmEyebrow>Coach only</PmEyebrow>
+          <div className="text-sm text-dim space-y-1">
+            <p>{PM_LENS[f.lens]} · {PM_TYPES[f.type]} · {f.domains.map(d => PM_DOMAINS[d]).join(', ')}</p>
+            {f.client_question && <p>Shown as a question while Thin: <em>{f.client_question}</em></p>}
+            <p>{[f.client_undervalues && 'Client undervalues it', f.works_against_aims && 'Works against own aims', f.coach_framed && 'Frame came from the coach'].filter(Boolean).join(' · ') || 'No flags'}</p>
+            {(f.client_responses || []).length > 0 && (
+              <div className="pt-2">
+                <p className="text-[var(--text)]">The client's responses</p>
+                {f.client_responses.map((r, i) => <p key={i}>{pmDate(r.at)} · {PM_RESPONSE_WORDS[r.kind]?.replace('You', 'Client') || r.kind}{r.text ? `: "${r.text}"` : ''}</p>)}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+
+function PmEmptyBody({ col, sec, clientView, pending, onNav }) {
+  return (
+    <>
+      <PmBlock title="What we looked at"><p>{sec.line}.</p></PmBlock>
+      <PmBlock title="Result">
+        {col.id === 'growth'
+          ? <p>{clientView ? 'This part is built from findings we have looked at together. It fills in once there are some.' : 'Nothing accepted here yet. Proposals wait in the Review Queue and can be accepted once the findings they rest on are confirmed.'}</p>
+          : <p><strong className="text-[var(--text)]">Nothing here yet.</strong> {clientView ? 'We do not fill an area just to have something to show.' : 'No confirmed finding in this section.'}</p>}
+        {!clientView && pending > 0 && (
+          <button onClick={() => onNav(`/model/review/${col.id}/${sec.id}`)} className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold mt-3 block">Review {pending === 1 ? 'it' : `these ${pending}`} now</button>
+        )}
+      </PmBlock>
+    </>
+  );
+}
+
+// The reader: overlay panel with breadcrumb, close, and previous / next (also ← → and Esc).
+function PmReader({ crumbs, onClose, prev, next, footer, children, accent }) {
+  const body = useRef(null);
+  useEffect(() => {
+    const k = (e) => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowRight' && next) next.go();
+      if (e.key === 'ArrowLeft' && prev) prev.go();
+    };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [onClose, prev, next]);
+  useEffect(() => { if (body.current) body.current.scrollTop = 0; }, [crumbs.join('/')]);
+  useEffect(() => { const o = document.body.style.overflow; document.body.style.overflow = 'hidden'; return () => { document.body.style.overflow = o; }; }, []);
+  return (
+    <div className="fixed inset-0 z-50 flex items-stretch md:items-center justify-center md:p-8" style={{ background: 'rgba(8,6,14,0.72)', backdropFilter: 'blur(3px)' }} onClick={onClose}>
+      <div className="w-full max-w-3xl flex flex-col md:rounded-2xl overflow-hidden" style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderTop: `3px solid ${accent || 'var(--primary)'}`, maxHeight: '100%' }} onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3 px-5 md:px-7 py-3.5" style={{ borderBottom: '1px solid var(--border)' }}>
+          <p className="text-xs text-faint flex-1 min-w-0 truncate">
+            {crumbs.map((c, i) => <span key={i}>{i > 0 && <span className="mx-1.5">›</span>}<span className={i === crumbs.length - 1 ? 'text-[var(--text)]' : ''}>{c}</span></span>)}
+          </p>
+          <button onClick={onClose} className="surface-2 rounded-lg px-3 py-1 text-xs">Close</button>
+        </div>
+        <div ref={body} className="flex-1 overflow-y-auto px-5 md:px-12 py-8">{children}</div>
+        {footer && <div className="px-5 md:px-7 py-3" style={{ borderTop: '1px solid var(--border)', background: 'var(--surface-2)' }}>{footer}</div>}
+        <div className="flex items-center gap-3 px-5 md:px-7 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+          {prev ? <button onClick={prev.go} className="surface-2 rounded-lg px-3 py-1.5 text-xs text-dim truncate max-w-[45%]">← {prev.label}</button> : <span />}
+          <span className="flex-1" />
+          {next && <button onClick={next.go} className="surface-2 rounded-lg px-3 py-1.5 text-xs text-dim truncate max-w-[45%]">{next.label} →</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PmFindingTitle({ f, clientView, eyebrow, color }) {
+  const asQuestion = f.confidence === 'thin';
+  return (
+    <div className="mb-8">
+      <PmEyebrow color={color}>{eyebrow}</PmEyebrow>
+      <div className="flex items-center gap-2 flex-wrap mb-3">
+        <PmSure c={f.confidence} />
+        {f.status === 'disputed' && <PmChip color="#f87171">Under review</PmChip>}
+        {!clientView && <PmCoachChips f={f} />}
+      </div>
+      <h2 className={'text-2xl font-bold leading-snug ' + (asQuestion ? 'italic' : '')}>{pmHeadline(f)}</h2>
+    </div>
+  );
+}
+
+// How sure, in words the client can read without learning our labels (from "The Read").
+const PM_CONF_LABEL = { solid: 'Established', live: 'Emerging possibility', thin: 'Question' };
+const PM_CONF_HINT = { solid: 'seen in more than one setting, with known exceptions', live: 'seen more than once; another explanation still stands', thin: 'your answer could settle it' };
+const PM_CONF_DOTS = { thin: 1, live: 2, solid: 3 };
+
+function PmSure({ c, small }) {
+  const n = PM_CONF_DOTS[c] || 0, color = PM_CONF_COLOR[c];
+  return (
+    <span className="inline-flex items-center gap-1.5" title={`${PM_CONF_LABEL[c]}: ${PM_CONF_HINT[c]}`}>
+      <span className="inline-flex gap-[3px]">{[1, 2, 3].map(i => <span key={i} className="rounded-full" style={{ width: small ? 6 : 7, height: small ? 6 : 7, background: i <= n ? color : 'transparent', border: `1px solid ${i <= n ? color : 'var(--border)'}` }} />)}</span>
+      <span className={(small ? 'text-[11px]' : 'text-xs') + ' font-medium'} style={{ color }}>{PM_CONF_LABEL[c]}</span>
+    </span>
+  );
+}
+
+// What the read was built from: the sessions every pass read, their date range, and how many weeks that spans.
+function pmReadInfo(pm) {
+  const ids = [...new Set(pm.runs.flatMap(r => r.sessions_read || []))].filter(id => /^\d{4}-\d{2}-\d{2}/.test(id)).sort();
+  if (!ids.length) return null;
+  const first = ids[0].slice(0, 10), last = ids[ids.length - 1].slice(0, 10);
+  const weeks = Math.max(1, Math.round((new Date(last) - new Date(first)) / (7 * 864e5)));
+  const lastRun = pm.runs[pm.runs.length - 1]?.created_at;
+  return { sessions: ids.length, first, last, weeks, lastRun };
+}
+const pmDay = (d) => new Date(d + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
+// The quote that best carries a finding: the client's own words, said in the room if possible, shortest first.
+function pmBestQuote(pm, f) {
+  const ev = pm.evidenceFor(f.id).filter(e => !e.is_counter && e.speaker === 'client');
+  const rank = { direct: 0, self_report: 1, inference: 2 };
+  return ev.sort((a, b) => (rank[a.class] ?? 3) - (rank[b.class] ?? 3) || a.quote.length - b.quote.length)[0] || null;
+}
+
+function PmLegend() {
+  return (
+    <div className="surface rounded-2xl p-5">
+      <p className="text-[10px] tracking-[0.2em] uppercase text-faint mb-3">How to read the labels</p>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {['solid', 'live', 'thin'].map(c => <div key={c}><PmSure c={c} /><p className="text-faint text-xs mt-1">{PM_CONF_HINT[c][0].toUpperCase() + PM_CONF_HINT[c].slice(1)}.</p></div>)}
+        <div><span className="text-xs font-medium text-dim">Nothing yet</span><p className="text-faint text-xs mt-1">Not seen often enough to show. We don't fill an area just to have something there.</p></div>
+      </div>
+    </div>
+  );
+}
+
+// Coach-only: whether this client's own login can open their read. Off by default; the database enforces it.
+function PmClientAccess({ pm, name }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const s = pm.settings;
+  const on = !!s?.visible;
+  const toggle = async () => {
+    if (!on && !window.confirm(`Let ${name} open the read in their own login?\n\n${name} sees exactly what "Show as client" shows: confirmed findings, shared predictions and active suggestions, and is asked to agree before anything appears. You can turn it off again at any time.`)) return;
+    setBusy(true); setErr('');
+    const r = await pmAttempt(() => pm.setClientVisible(!on));
+    setBusy(false); if (!r.ok) setErr(r.error);
+  };
+  const status = !on ? `${name} can't see the read yet. Read it through in "Show as client" first, then turn it on.`
+    : s.consent_at ? `On. ${name} agreed on ${pmDate(s.consent_at)}${s.delete_requested_at ? `. ${name} asked to delete it on ${pmDate(s.delete_requested_at)}.` : '.'}`
+    : `On since ${s.visible_changed_at ? pmDate(s.visible_changed_at) : 'today'}. ${name} is asked to agree before anything shows.`;
+  return (
+    <div className="surface rounded-xl p-5 flex items-center gap-4 flex-wrap" style={{ borderLeft: `3px solid ${on ? '#34d399' : 'var(--border)'}` }}>
+      <span className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ color: on ? '#34d399' : 'var(--text-faint)', background: on ? 'rgba(52,211,153,0.12)' : 'var(--surface-2)' }}><Icon name={on ? 'users' : 'lock'} size={17} /></span>
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-sm">{name}'s own login</p>
+        <p className="text-faint text-sm mt-0.5">{status}</p>
+        <PmSaveState busy={busy} err={err} />
+      </div>
+      <button disabled={busy} onClick={toggle} className={'px-4 py-1.5 rounded-lg text-sm font-semibold shrink-0 ' + (on ? 'surface' : 'btn-primary')}>{on ? 'Turn off' : `Show ${name} the read`}</button>
+    </div>
+  );
+}
+
+function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
+  const [cvSaved, setClientView] = usePmClientView();
+  const clientView = !!forceClient || cvSaved;
+  const [openKey, setOpenKey] = useState(null);
+  if (pm.status === 'loading' || pm.status === 'idle') return <p className="text-faint text-sm">Loading…</p>;
+  if (pm.status === 'error') return <p className="text-secondary text-sm">Couldn't load the model: {pm.error}</p>;
+
+  const visible = pm.findings.filter(f => PM_CLIENT_VISIBLE.includes(f.status));
+  const candidates = pm.findings.filter(f => f.status === 'candidate');
+  const growth = pmGrowth(pm, clientView);
+  const proposals = { prediction: pm.predictions.filter(p => p.status === 'proposed').length,
+    nudges: pm.interventions.filter(i => i.status === 'proposed' && i.kind === 'nudge').length,
+    interventions: pm.interventions.filter(i => i.status === 'proposed' && i.kind !== 'nudge').length, evolution: 0 };
+  const proposalCount = proposals.prediction + proposals.nudges + proposals.interventions;
+  const pages = pmPages(visible, growth);
+  const idx = pages.findIndex(p => p.key === openKey);
+  const page = idx >= 0 ? pages[idx] : null;
+  const label = (p) => (p.f || p.g) ? `${p.col.title} · ${p.sec.title}${p.of > 1 ? ` (${p.n} of ${p.of})` : ''}` : `${p.col.title} · ${p.sec.title}`;
+  const name = data.profile?.preferredName || (data.profile?.name || '').split(' ')[0];
+  const read = pmReadInfo(pm);
+  const by = (c) => visible.filter(f => f.confidence === c).length;
+  const suggestions = growth.nudges.length + growth.interventions.length;
+  const forecasts = growth.prediction.filter(p => p.status === 'scored').length;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
+  const top = [...visible].sort(pmSort).slice(0, 3);
+  const keyOf = (f) => `${pmPlace(f)}/${f.id}`;
+
+  const stats = [
+    ...(read ? [[read.weeks, 'Weeks'], [read.sessions, 'Sessions']] : []),
+    [by('solid'), 'Established'],
+    [by('live'), 'Emerging possibilities'],
+    [by('thin'), 'Questions for you'],
+    [suggestions, 'Suggestions'],
+    [forecasts, 'Forecasts checked'],
+  ];
+
+  return (
+    <div className="fade-in space-y-10">
+      {/* Hero, as on the Overview */}
+      <div>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="min-w-0">
+            <p className="text-faint text-xs tracking-[0.2em] mb-2">{clientView ? 'YOUR READ' : 'PERSON MODEL'}</p>
+            <h1 className="text-3xl md:text-4xl font-bold mb-3">{clientView ? 'Your read' : `${name}'s read`}</h1>
+            <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>
+              {read ? `Built from ${plural(read.sessions, 'session')}, ${pmDay(read.first)} to ${pmDay(read.last)}.` : 'Built from your sessions.'}
+              {' '}{clientView ? 'What we have learned together so far.' : `Confirmed findings, laid out as ${name} sees them.`}
+            </p>
+          </div>
+          {isCoach && (
+            <button onClick={() => setClientView(!clientView)}
+              className={'px-3 py-1.5 rounded-lg text-sm inline-flex items-center gap-2 shrink-0 ' + (clientView ? 'btn-primary' : 'surface hover:bg-primary-soft')}>
+              <Icon name={clientView ? 'users' : 'lock'} size={15} /> {clientView ? 'Showing as client' : 'Show as client'}
+            </button>
+          )}
+        </div>
+        {clientView && !forceClient && <p className="text-xs text-faint mt-3">Client view: confirmed findings only, as {name} sees them in their own login once you switch it on.</p>}
+      </div>
+
+      {!clientView && candidates.length + proposalCount > 0 && (
+        <div className="grid"><CTACard icon="clipboard" title={`${candidates.length + proposalCount} waiting for your review`}
+          body={`${plural(candidates.length, 'finding')} and ${plural(proposalCount, 'growth proposal')}. Nothing reaches ${name} until you confirm it.`}
+          cta="Review now →" onClick={() => onNav('/model/review')} /></div>
+      )}
+
+      {!clientView && isCoach && <PmClientAccess pm={pm} name={name} />}
+
+      {/* About this read */}
+      <div>
+        <p className="text-[10px] tracking-[0.2em] uppercase text-faint mb-3">About this read</p>
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
+          {stats.map(([v, l], i) => (
+            <div key={l} className="surface rounded-xl px-3 py-4 text-center">
+              <div className="text-3xl font-bold" style={{ color: i < 2 && read ? 'var(--primary)' : v > 0 ? 'var(--text)' : 'var(--text-faint)' }}>{v}</div>
+              <div className="text-[10px] tracking-[0.14em] text-faint mt-1 uppercase leading-tight">{l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* What stands out */}
+      {top.length > 0 && (
+        <div>
+          <SectionHeading sub="The most important things we have found so far, most important first.">What stands out</SectionHeading>
+          <div className="space-y-3">
+            {top.map((f, i) => {
+              const col = PM_COLUMNS.find(c => pmPlace(f).startsWith(c.id + '/'));
+              const q = pmBestQuote(pm, f);
+              return (
+                <button key={f.id} onClick={() => setOpenKey(keyOf(f))} className="surface rounded-xl p-5 flex gap-4 items-start w-full text-left hover:opacity-95 transition" style={{ borderLeft: `3px solid ${col.color}` }}>
+                  <span className="w-8 h-8 rounded-full flex items-center justify-center font-bold flex-shrink-0 text-white" style={{ background: 'var(--primary)' }}>{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3 flex-wrap mb-1">
+                      <span className="text-[10px] tracking-[0.18em] uppercase" style={{ color: col.color }}>{col.title}</span>
+                      <PmSure c={f.confidence} small />
+                      {!clientView && <span className="text-faint text-[10px] font-mono">{f.code}</span>}
+                    </div>
+                    <h3 className={'text-lg font-semibold leading-snug ' + (f.confidence === 'thin' ? 'italic' : '')}>{pmHeadline(f)}</h3>
+                    {q && <p className="italic reading border-l-2 pl-4 mt-3 text-dim" style={{ borderColor: 'var(--secondary)', fontSize: '15px' }}>"{q.quote}"</p>}
+                  </div>
+                  <span className="text-faint pt-1">→</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* The three parts */}
+      <div>
+        <SectionHeading sub="Everything in one place. Open any card to read it.">Your read, in three parts</SectionHeading>
+        <div className="grid gap-4 lg:grid-cols-3 items-start">
+          {PM_COLUMNS.map(col => {
+            const isG = col.id === 'growth';
+            const secs = isG ? PM_GROWTH_SECTIONS : PM_SECTIONS[col.id];
+            const itemsOf = (sec) => isG ? (sec.id === 'evolution' ? growth.evolution : growth[sec.id]) : visible.filter(pmIn(col, sec)).sort(pmSort);
+            const waitingOf = (sec) => clientView ? 0 : isG ? (proposals[sec.id] || 0) : candidates.filter(pmIn(col, sec)).length;
+            const filled = secs.filter(sec => itemsOf(sec).length);
+            const empty = secs.filter(sec => !itemsOf(sec).length);
+            const colF = isG ? [] : visible.filter(f => pmPlace(f).startsWith(col.id + '/'));
+            const summary = isG
+              ? [suggestions && plural(suggestions, 'suggestion'), growth.prediction.length && plural(growth.prediction.length, 'forecast'), forecasts && `${forecasts} checked`, growth.evolution.length && plural(growth.evolution.length, 'change')].filter(Boolean)
+              : [colF.filter(f => f.confidence === 'solid').length && `${colF.filter(f => f.confidence === 'solid').length} established`,
+                 colF.filter(f => f.confidence === 'live').length && plural(colF.filter(f => f.confidence === 'live').length, 'emerging possibility', 'emerging possibilities'),
+                 colF.filter(f => f.confidence === 'thin').length && plural(colF.filter(f => f.confidence === 'thin').length, 'question')].filter(Boolean);
+            return (
+              <div key={col.id} className="surface rounded-2xl overflow-hidden flex flex-col" style={{ borderTop: `3px solid ${col.color}` }}>
+                <div className="px-5 pt-5 pb-4" style={{ background: col.color + '12', borderBottom: '1px solid var(--border)' }}>
+                  <div className="flex items-center gap-3">
+                    <span className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ border: `1px solid ${col.color}66`, color: col.color, background: col.color + '1f' }}><Icon name={col.icon} size={18} /></span>
+                    <div className="min-w-0">
+                      <h2 className="text-lg font-bold leading-tight">{col.title}</h2>
+                      <p className="text-faint text-xs">{col.line}</p>
+                    </div>
+                  </div>
+                  <p className="text-[11px] font-semibold mt-3" style={{ color: col.color }}>{summary.length ? summary.join(' · ') : 'Nothing shown yet'}</p>
+                </div>
+                <div className="p-4 flex flex-col gap-3">
+                  {filled.map(sec => isG
+                    ? <PmGrowthCard key={sec.id} sec={sec} col={col} items={itemsOf(sec)} waiting={waitingOf(sec)} clientView={clientView} open={(k) => setOpenKey(k)} onNav={onNav} />
+                    : (
+                      <div key={sec.id} className="rounded-xl p-3.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${col.color}` }}>
+                        <p className="text-[10px] tracking-[0.18em] uppercase font-semibold mb-2" style={{ color: col.color }}>{sec.title}</p>
+                        <div className="space-y-2">
+                          {itemsOf(sec).map(f => (
+                            <button key={f.id} onClick={() => setOpenKey(`${col.id}/${sec.id}/${f.id}`)} className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-primary-soft transition" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                              <p className={'text-sm leading-snug ' + (f.confidence === 'thin' ? 'italic' : '')}>{pmHeadline(f)}</p>
+                              <div className="flex gap-2 mt-2 flex-wrap items-center">
+                                <PmSure c={f.confidence} small />
+                                {f.status === 'disputed' && <PmChip color="#f87171">Under review</PmChip>}
+                                {!clientView && <span className="text-faint text-[10px] font-mono ml-auto">{f.code}</span>}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        {waitingOf(sec) > 0 && <PmReviewLink n={waitingOf(sec)} to={`/model/review/${col.id}/${sec.id}`} onNav={onNav} />}
+                      </div>
+                    ))}
+                  {empty.length > 0 && (
+                    <div className="rounded-xl px-3.5 py-3" style={{ border: '1px dashed var(--border)' }}>
+                      <p className="text-[10px] tracking-[0.18em] uppercase text-faint mb-2">Nothing yet</p>
+                      <div className="flex flex-col gap-1.5">
+                        {empty.map(sec => (
+                          <div key={sec.id} className="flex items-center justify-between gap-2">
+                            <button onClick={() => setOpenKey(sec.id === 'evolution' ? 'growth/evolution' : `${col.id}/${sec.id}`)} className="text-sm text-dim hover:text-[var(--text)] text-left">{sec.title}</button>
+                            {waitingOf(sec) > 0 && <PmReviewLink n={waitingOf(sec)} to={`/model/review/${col.id}/${sec.id}`} onNav={onNav} chip />}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <PmLegend />
+
+      {page && (
+        <PmReader accent={page.col.color} crumbs={[clientView ? 'Your read' : `${name}'s read`, page.col.title, page.sec.title]}
+          onClose={() => setOpenKey(null)}
+          prev={idx > 0 ? { label: label(pages[idx - 1]), go: () => setOpenKey(pages[idx - 1].key) } : null}
+          next={idx < pages.length - 1 ? { label: label(pages[idx + 1]), go: () => setOpenKey(pages[idx + 1].key) } : null}
+          footer={page.g && !clientView ? <PmGrowthActions key={page.g.id} g={page.g} type={page.gType} pm={pm} data={data} />
+            : forceClient && page.f ? <PmRespond key={page.f.id} f={page.f} pm={pm} /> : null}>
+          {page.f
+            ? <><PmFindingTitle f={page.f} clientView={clientView} color={page.col.color} eyebrow={`${page.col.title} · ${page.sec.title}${page.of > 1 ? ` (${page.n} of ${page.of})` : ''}`} />
+                <PmFindingBody f={page.f} pm={pm} data={data} clientView={clientView} /></>
+            : page.g
+            ? <><PmGrowthTitle g={page.g} type={page.gType} clientView={clientView} color={page.col.color} eyebrow={`${page.col.title} · ${page.sec.title}${page.of > 1 ? ` (${page.n} of ${page.of})` : ''}`} />
+                {page.gType === 'prediction' ? <PmPredictionBody p={page.g} pm={pm} clientView={clientView} /> : <PmInterventionBody i={page.g} pm={pm} clientView={clientView} />}</>
+            : page.evolution
+            ? <><div className="mb-8"><PmEyebrow color={page.col.color}>{page.col.title}</PmEyebrow><h2 className="text-2xl font-bold">{page.sec.title}</h2></div>
+                <PmEvolutionBody entries={page.evolution} clientView={clientView} /></>
+            : <><div className="mb-8"><PmEyebrow color={page.col.color}>{page.col.title}</PmEyebrow><h2 className="text-2xl font-bold">{page.sec.title}</h2></div>
+                <PmEmptyBody col={page.col} sec={page.sec} clientView={clientView} onNav={onNav} pending={page.col.id === 'growth' ? (clientView ? 0 : proposals[page.sec.id] || 0) : candidates.filter(pmIn(page.col, page.sec)).length} /></>}
+        </PmReader>
+      )}
+    </div>
+  );
+}
+
+// ── The client's own read (their login). Everything comes through pm_client_read(), which returns only
+// what the client may see, and only once the coach has switched it on and the client has agreed.
+const PM_CONSENT_VERSION = 'v1-2026-11';
+
+// Local preview only (?mock=<folder> without coach=1): imitates pm_client_read() from the preview file.
+function pmMockClientRead(m, st) {
+  if (!st.visible) return { available: false };
+  if (!st.consent_at) return { available: true, consented: false };
+  const vis = ['confirmed', 'disputed'];
+  const live = m.findings.filter(f => vis.includes(f.status));
+  const ids = new Set(live.map(f => f.id));
+  const confirmedAt = (id) => m.history.find(h => h.finding_id === id && h.field === 'status' && h.after === 'confirmed')?.changed_at;
+  return {
+    available: true, consented: true, consent_at: st.consent_at, delete_requested_at: st.delete_requested_at || null,
+    findings: live.map(f => ({ ...f, code: undefined, coach_framed: undefined, pattern_sequence: (f.pattern_sequence || []).map(x => ({ step: x.step, text: x.text })),
+      my_response: [...(f.client_responses || [])].reverse().find(r => r.by === 'client') || null })),
+    evidence: m.evidence.filter(e => ids.has(e.finding_id) && e.speaker === 'client').map(e => ({ id: e.id, finding_id: e.finding_id, session_id: e.session_id, quote: e.quote, class: e.class, is_counter: e.is_counter, speaker: 'client' })),
+    history: m.history.filter(h => ids.has(h.finding_id) && (h.field === 'created' || (['status', 'confidence', 'scope', 'exceptions', 'statement', 'client_headline'].includes(h.field) && confirmedAt(h.finding_id) && h.changed_at >= confirmedAt(h.finding_id))))
+      .map(h => ({ id: h.id, finding_id: h.finding_id, changed_at: h.changed_at, field: h.field, before: ['confidence', 'status'].includes(h.field) ? h.before : null, after: ['confidence', 'status'].includes(h.field) ? h.after : null })),
+    predictions: m.predictions.filter(p => p.shared_with_client && ['open', 'scored'].includes(p.status) && p.finding_ids.every(id => ids.has(id))),
+    interventions: m.interventions.filter(i => ['active', 'done'].includes(i.status) && ids.has(i.finding_id)),
+    sessions_read: [...new Set(m.runs.flatMap(r => r.sessions_read || []))],
+  };
+}
+
+function useClientRead(enabled) {
+  const [state, setState] = useState({ status: 'idle', r: null, error: null });
+  const mock = useRef(null);
+  const load = useCallback(async () => {
+    if (!enabled) return;
+    if (MOCK_FOLDER && !MOCK_COACH) {
+      if (!mock.current) {
+        const res = await fetch(`data/_preview/${MOCK_FOLDER}.pm.json?t=${Date.now()}`);
+        const m = res.ok ? await res.json() : null;
+        mock.current = { m, st: { visible: !!m, consent_at: null, delete_requested_at: null } };
+        if (m) for (const k of ['predictions', 'interventions', 'runs']) m[k] = m[k] || [];
+        window.__pmClientMock = mock.current;
+      }
+      const { m, st } = mock.current;
+      setState({ status: 'ready', r: m ? pmMockClientRead(m, st) : { available: false }, error: null });
+      return;
+    }
+    if (!sb) return;
+    const { data, error } = await sb.rpc('pm_client_read');
+    // An older database without the function, or any error, simply means no read is offered.
+    setState({ status: 'ready', r: error ? { available: false } : data, error: error ? error.message : null });
+  }, [enabled]);
+  useEffect(() => { load(); }, [load]);
+
+  const call = async (fn, args, mockFn) => {
+    if (MOCK_FOLDER && !MOCK_COACH) { mockFn(mock.current); await load(); return true; }
+    const { error } = await sb.rpc(fn, args);
+    if (error) throw new Error(error.message);
+    await load();
+    return true;
+  };
+  const consent = () => call('pm_client_consent', { version: PM_CONSENT_VERSION }, (c) => { c.st.consent_at = new Date().toISOString(); });
+  const requestDelete = () => call('pm_client_request_delete', {}, (c) => { c.st.delete_requested_at = c.st.delete_requested_at || new Date().toISOString(); });
+  const respond = (finding, kind, note) => call('pm_client_respond', { finding, kind, note: note || '' }, (c) => {
+    if (kind !== 'agree' && !String(note || '').trim()) throw new Error('Please say what does not fit');
+    const f = c.m.findings.find(x => x.id === finding);
+    f.client_responses = [...(f.client_responses || []), { kind, text: note || '', at: new Date().toISOString(), by: 'client' }];
+    if (kind !== 'agree') f.status = 'disputed';
+  });
+
+  // Shape it like usePersonModel so the same page and reader render it.
+  const pm = useMemo(() => {
+    const r = state.r;
+    if (!r || !r.consented) return null;
+    const ev = {}, hi = {};
+    r.evidence.forEach(e => { (ev[e.finding_id] = ev[e.finding_id] || []).push(e); });
+    r.history.forEach(h => { (hi[h.finding_id] = hi[h.finding_id] || []).push(h); });
+    return {
+      status: 'ready', error: null,
+      findings: r.findings.map(f => ({ ...f, code: '', domains: f.domains || [] })),
+      evidence: r.evidence, history: r.history, predictions: r.predictions, interventions: r.interventions,
+      growthHistory: [], settings: null,
+      runs: [{ sessions_read: r.sessions_read || [], created_at: null }],
+      evidenceFor: id => ev[id] || [], historyFor: id => hi[id] || [], growthHistoryFor: () => [],
+      respond,
+    };
+  }, [state.r]);
+
+  return { ...state, available: !!state.r?.available, consented: !!state.r?.consented, pm, consent, requestDelete, respond, reload: load };
+}
+
+// Shown once, before anything else. Nothing of the read is loaded until the client agrees.
+function PmConsent({ name, cr }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const agree = async () => { setBusy(true); setErr(''); const r = await pmAttempt(() => cr.consent()); setBusy(false); if (!r.ok) setErr(r.error); };
+  const points = [
+    ['What it is', 'A picture of how you operate, built from the transcripts of our sessions. It describes patterns, not who you are.'],
+    ['Who has checked it', 'Dhiren reads and confirms every part of it before you see it. Each part shows the moments it rests on, in your own words, and how sure we are.'],
+    ['Your say', 'If something doesn\'t fit, tell us right there. Your answer goes to Dhiren, and the read changes. Some parts are put to you as questions, because only you can settle them.'],
+    ['Who can see it', 'Only you and Dhiren. You can download it whenever you like, and ask for it to be deleted at any time.'],
+  ];
+  return (
+    <div className="fade-in max-w-2xl">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">YOUR READ</p>
+      <h1 className="text-3xl md:text-4xl font-bold mb-3">Before you open it</h1>
+      <p className="text-secondary italic reading mb-8" style={{ fontSize: '17px' }}>A few things to know, {name}.</p>
+      <div className="space-y-3 mb-8">
+        {points.map(([t, b], i) => (
+          <div key={t} className="surface rounded-xl p-5 flex gap-4 items-start">
+            <span className="w-8 h-8 rounded-full flex items-center justify-center font-bold flex-shrink-0 text-white" style={{ background: 'var(--primary)' }}>{i + 1}</span>
+            <div><h3 className="font-semibold">{t}</h3><p className="text-dim reading mt-1" style={{ fontSize: '15px' }}>{b}</p></div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-4 flex-wrap">
+        <button disabled={busy} onClick={agree} className="btn-primary px-5 py-2.5 rounded-lg font-semibold">I understand. Show me my read</button>
+        <PmSaveState busy={busy} err={err} />
+      </div>
+      <p className="text-faint text-xs mt-4">Not ready? You can come back to this any time from your Overview.</p>
+    </div>
+  );
+}
+
+// The client's response to one finding: agree, say it doesn't fit, or correct a fact.
+const PM_RESPONSE_WORDS = { agree: 'You said this fits', dispute: 'You said this doesn\'t fit', correct: 'You corrected a fact' };
+function PmRespond({ f, pm }) {
+  const [mode, setMode] = useState(null);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const send = async (kind) => {
+    setBusy(true); setErr('');
+    const r = await pmAttempt(() => pm.respond(f.id, kind, note.trim()));
+    setBusy(false);
+    if (r.ok) { setMode(null); setNote(''); } else setErr(r.error);
+  };
+  const mine = f.my_response;
+  return (
+    <div>
+      {mine && !mode && <p className="text-xs text-faint mb-2">{PM_RESPONSE_WORDS[mine.kind]} on {pmDate(mine.at)}{mine.text ? `: "${mine.text}"` : '.'}{f.status === 'disputed' ? ' Dhiren is looking at it.' : ''}</p>}
+      {mode && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <textarea autoFocus className="input flex-1" rows={2} style={{ minWidth: 220 }} value={note} onChange={e => setNote(e.target.value)}
+            placeholder={mode === 'dispute' ? 'What doesn\'t fit? A sentence is enough.' : 'What is the fact, as it actually was?'} />
+          <button disabled={busy || !note.trim()} onClick={() => send(mode)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold" style={{ opacity: note.trim() ? 1 : 0.5 }}>Send to Dhiren</button>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 items-center">
+        <button disabled={busy} onClick={() => send('agree')} className="surface px-3 py-1.5 rounded-lg text-sm">This fits</button>
+        <button disabled={busy} onClick={() => setMode(mode === 'dispute' ? null : 'dispute')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'dispute' ? 'btn-primary' : 'surface')}>This isn't right</button>
+        <button disabled={busy} onClick={() => setMode(mode === 'correct' ? null : 'correct')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'correct' ? 'btn-primary' : 'surface')}>Correct a fact</button>
+        <PmSaveState busy={busy} err={err} />
+      </div>
+    </div>
+  );
+}
+
+// "Download my read": a plain, printable page the client can save as a PDF.
+function pmPrintRead(pm, data, name) {
+  const esc = (t) => String(t ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const visible = pm.findings.filter(f => PM_CLIENT_VISIBLE.includes(f.status));
+  const read = pmReadInfo(pm);
+  const growth = pmGrowth(pm, true);
+  let body = `<h1>Your read</h1><p class="sub">${read ? `Built from ${read.sessions} sessions, ${pmDay(read.first)} to ${pmDay(read.last)}.` : ''} Downloaded ${pmDate(new Date().toISOString())}.</p>`;
+  for (const col of PM_COLUMNS.filter(c => c.id !== 'growth')) {
+    const fs = visible.filter(f => pmPlace(f).startsWith(col.id + '/')).sort(pmSort);
+    if (!fs.length) continue;
+    body += `<h2>${esc(col.title)}</h2>`;
+    for (const f of fs) {
+      const qs = pm.evidenceFor(f.id).filter(e => !e.is_counter).slice(0, 3);
+      body += `<div class="f"><p class="tag">${esc(PM_CONF_LABEL[f.confidence])}${f.status === 'disputed' ? ' · under review' : ''}</p><h3>${esc(pmHeadline(f))}</h3><p>${esc(f.statement)}</p>`
+        + (f.mechanism ? `<p><b>What explains it:</b> ${esc(f.mechanism)}</p>` : '')
+        + (f.exceptions ? `<p><b>Exceptions:</b> ${esc(f.exceptions)}</p>` : '')
+        + qs.map(e => `<blockquote>"${esc(e.quote)}"<span>${esc(pmSessionLabel(data, e.session_id))}</span></blockquote>`).join('') + `</div>`;
+    }
+  }
+  const items = [...growth.prediction.map(p => ['Prediction', p.situation, p.expected]), ...[...growth.nudges, ...growth.interventions].map(i => [PM_KIND[i.kind], i.opportunity, i.action])];
+  if (items.length) body += `<h2>My Growth</h2>` + items.map(([k, t, d]) => `<div class="f"><p class="tag">${esc(k)}</p><h3>${esc(t)}</h3><p>${esc(d)}</p></div>`).join('');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Your read · ${esc(name)}</title><style>
+    body{font-family:Georgia,serif;max-width:720px;margin:40px auto;padding:0 24px;color:#1c1729;line-height:1.55}
+    h1{font-family:-apple-system,Helvetica,sans-serif;font-size:30px;margin:0 0 4px}h2{font-family:-apple-system,Helvetica,sans-serif;font-size:18px;margin:36px 0 12px;padding-left:10px;border-left:3px solid #7e3af2}
+    h3{font-family:-apple-system,Helvetica,sans-serif;font-size:16px;margin:2px 0 6px}.sub{color:#92400e;font-style:italic}.tag{font-family:-apple-system,Helvetica,sans-serif;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#7e3af2;margin:0}
+    .f{page-break-inside:avoid;margin:0 0 22px}blockquote{margin:8px 0;padding-left:12px;border-left:2px solid #92400e;font-style:italic}blockquote span{display:block;font-style:normal;font-size:12px;color:#5b5470}
+    @media print{body{margin:0}}</style></head><body>${body}</body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { alert('Your browser blocked the download window. Allow pop-ups for this page and try again.'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+  setTimeout(() => { try { w.focus(); w.print(); } catch {} }, 300);
+}
+
+function PmClientRead({ data, cr, onNav }) {
+  const name = data.profile?.preferredName || (data.profile?.name || '').split(' ')[0];
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  if (cr.status !== 'ready') return <p className="text-faint text-sm">Loading…</p>;
+  if (!cr.available) return (
+    <div className="surface rounded-2xl p-8 text-center fade-in"><p className="text-dim reading">Your read isn't available yet. Dhiren will let you know when it is.</p>
+      <button onClick={() => onNav('/overview')} className="text-primary text-sm mt-2">Back to your Overview</button></div>
+  );
+  if (!cr.consented) return <PmConsent name={name} cr={cr} />;
+  const askDelete = async () => {
+    if (!window.confirm('Ask Dhiren to delete your read?\n\nYour read stays visible until Dhiren has deleted it.')) return;
+    setBusy(true); setErr(''); const r = await pmAttempt(() => cr.requestDelete()); setBusy(false); if (!r.ok) setErr(r.error);
+  };
+  return (
+    <div className="space-y-10">
+      <PmOverview data={data} pm={cr.pm} onNav={onNav} isCoach={false} forceClient />
+      <div className="surface rounded-2xl p-5 flex items-center gap-3 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-sm">Your copy, your choice</p>
+          <p className="text-faint text-sm mt-0.5">{cr.r.delete_requested_at ? `You asked for your read to be deleted on ${pmDate(cr.r.delete_requested_at)}. Dhiren will take care of it.` : 'Download your read to keep, or ask for it to be deleted.'}</p>
+          <PmSaveState busy={busy} err={err} />
+        </div>
+        <button onClick={() => pmPrintRead(cr.pm, data, name)} className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold">Download my read</button>
+        {!cr.r.delete_requested_at && <button disabled={busy} onClick={askDelete} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Ask to delete</button>}
+      </div>
+    </div>
+  );
+}
+
+// disputed: the client said it doesn't fit or corrected a fact. Keep, reword, or retire (framework: Under review).
+function PmReviewActions({ f, pm, onDone, disputed }) {
+  const [mode, setMode] = useState(null); // 'reword' | 'reject' | 'merge'
+  const [draft, setDraft] = useState({ client_headline: f.client_headline, client_question: f.client_question || '', statement: f.statement, confidence: f.confidence, importance: f.importance });
+  const [reason, setReason] = useState('');
+  const [target, setTarget] = useState('');
+  const [busy, setBusy] = useState(false);
+  const targets = pm.findings.filter(x => x.id !== f.id && ['confirmed', 'disputed', 'candidate'].includes(x.status));
+  const [err, setErr] = useState('');
+  const run = async (fn, leaves) => { setBusy(true); setErr(''); const r = await pmAttempt(fn); setBusy(false); if (r.ok) { setMode(null); if (leaves) onDone(); } else setErr(r.error); };
+  const changed = () => {
+    const p = {};
+    for (const k of Object.keys(draft)) {
+      const v = k === 'client_question' ? (draft[k].trim() || null) : draft[k];
+      if (v !== (f[k] ?? null)) p[k] = v;
+    }
+    return p;
+  };
+
+  return (
+    <div>
+      {mode === 'reword' && (
+        <div className="mb-3 space-y-2 max-h-[40vh] overflow-y-auto pr-1">
+          <label className="block text-xs text-faint">Client headline<input className="input mt-1" value={draft.client_headline} onChange={e => setDraft({ ...draft, client_headline: e.target.value })} /></label>
+          <label className="block text-xs text-faint">As a question (shown while confidence is Thin)<input className="input mt-1" value={draft.client_question} onChange={e => setDraft({ ...draft, client_question: e.target.value })} /></label>
+          <label className="block text-xs text-faint">What happens<textarea className="input mt-1" rows={3} value={draft.statement} onChange={e => setDraft({ ...draft, statement: e.target.value })} /></label>
+          <div className="flex gap-3 flex-wrap items-end">
+            <label className="text-xs text-faint">Confidence
+              <select className="input mt-1" value={draft.confidence} onChange={e => setDraft({ ...draft, confidence: e.target.value })}>{['thin', 'live', 'solid'].map(c => <option key={c} value={c}>{c}</option>)}</select>
+            </label>
+            <label className="text-xs text-faint">Importance
+              <select className="input mt-1" value={draft.importance} onChange={e => setDraft({ ...draft, importance: e.target.value })}>{['high', 'medium', 'low'].map(c => <option key={c} value={c}>{c}</option>)}</select>
+            </label>
+            <button disabled={busy} onClick={() => run(() => pm.update(f.id, changed(), 'Reworded by coach'), false)} className="text-sm text-primary pb-2">Save wording, keep as candidate</button>
+          </div>
+        </div>
+      )}
+      {mode === 'reject' && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <input autoFocus className="input flex-1" style={{ minWidth: 220 }} placeholder="Why? (kept, so the same reading isn't proposed again)" value={reason} onChange={e => setReason(e.target.value)} />
+          <button disabled={busy || !reason.trim()} onClick={() => run(() => pm.update(f.id, { status: disputed ? 'retired' : 'rejected', reject_reason: reason.trim() }, reason.trim()), true)}
+            className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#f87171', color: 'white', opacity: reason.trim() ? 1 : 0.5 }}>{disputed ? 'Retire' : 'Reject'}</button>
+        </div>
+      )}
+      {mode === 'merge' && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <select className="input flex-1" style={{ minWidth: 220 }} value={target} onChange={e => setTarget(e.target.value)}>
+            <option value="">Merge into…</option>
+            {targets.map(t => <option key={t.id} value={t.id}>{t.code} · {t.client_headline} ({t.status})</option>)}
+          </select>
+          <button disabled={busy || !target} onClick={() => run(() => pm.merge(f.id, target, `Merged ${f.code} in review`), true)}
+            className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold" style={{ opacity: target ? 1 : 0.5 }}>Merge</button>
+          <p className="text-faint text-xs w-full">Its evidence moves to the other finding. This record is kept, marked as merged.</p>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 items-center">
+        <button disabled={busy} onClick={() => run(() => pm.update(f.id, { ...changed(), status: 'confirmed' }, disputed ? (mode === 'reword' ? 'Reworded after the client\'s response' : 'Kept after the client\'s response') : mode === 'reword' ? 'Reworded and confirmed by coach' : 'Confirmed by coach'), true)}
+          className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold">{mode === 'reword' ? 'Save and confirm' : disputed ? 'Keep as is' : 'Confirm'}</button>
+        <button disabled={busy} onClick={() => setMode(mode === 'reword' ? null : 'reword')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'reword' ? 'btn-primary' : 'surface')}>Reword</button>
+        {!disputed && <button disabled={busy} onClick={() => setMode(mode === 'merge' ? null : 'merge')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'merge' ? 'btn-primary' : 'surface')}>Merge</button>}
+        <button disabled={busy} onClick={() => setMode(mode === 'reject' ? null : 'reject')} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>{disputed ? 'Retire' : 'Reject'}</button>
+        <PmSaveState busy={busy} err={err} />
+        <span className="text-faint text-xs ml-auto hidden md:inline">{disputed ? 'Keeping or rewording clears "under review" for the client' : 'Confirming shows it to the client'}</span>
+      </div>
+    </div>
+  );
+}
+
+// Growth proposals, optionally only those for one Growth section (prediction / nudges / interventions).
+function pmGrowthProposals(pm, secId) {
+  const all = [
+    ...pm.predictions.filter(p => p.status === 'proposed').map(g => ({ g, type: 'prediction' })),
+    ...pm.interventions.filter(i => i.status === 'proposed').map(g => ({ g, type: 'intervention' })),
+  ];
+  if (!secId) return all;
+  return all.filter(x => secId === 'prediction' ? x.type === 'prediction'
+    : secId === 'nudges' ? x.type === 'intervention' && x.g.kind === 'nudge'
+    : secId === 'interventions' ? x.type === 'intervention' && x.g.kind !== 'nudge' : false);
+}
+const pmSectionOf = (section) => {
+  if (!section) return null;
+  const [colId, secId] = section.split('/');
+  const col = PM_COLUMNS.find(c => c.id === colId);
+  const sec = (colId === 'growth' ? PM_GROWTH_SECTIONS : PM_SECTIONS[colId] || []).find(x => x.id === secId);
+  return col && sec ? { colId, secId, col, sec } : null;
+};
+
+// section: "insights/gaps", "growth/nudges", … when opened from a section's "to review" link. Then only that
+// section's items are listed and the first one opens straight away; previous / next stay within the section.
+function PmReviewView({ data, pm, isCoach, onNav, section }) {
+  const [clientView, setClientView] = usePmClientView();
+  const [openId, setOpenId] = useState(null);
+  const [showClosed, setShowClosed] = useState(false);
+  const [openG, setOpenG] = useState(null);
+  const [openD, setOpenD] = useState(null);
+  const order = useRef([]);
+  const only = pmSectionOf(section);
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (!only || pm.status !== 'ready' || autoOpened.current) return;
+    autoOpened.current = true;
+    if (only.colId === 'growth') { const first = pmGrowthProposals(pm, only.secId)[0]; if (first) setOpenG(first.g.id); return; }
+    const q = pm.findings.filter(f => f.status === 'candidate' && pmPlace(f) === section).sort(pmSort);
+    if (q[0]) { order.current = q.map(f => f.id); setOpenId(q[0].id); }
+  }, [section, pm.status]);
+  if (pm.status === 'loading' || pm.status === 'idle') return <p className="text-faint text-sm">Loading…</p>;
+  if (pm.status === 'error') return <p className="text-secondary text-sm">Couldn't load the model: {pm.error}</p>;
+
+  const gQueue = !only ? pmGrowthProposals(pm) : only.colId === 'growth' ? pmGrowthProposals(pm, only.secId) : [];
+  const gi = gQueue.findIndex(x => x.g.id === openG);
+  const gOpen = gi >= 0 ? gQueue[gi] : null;
+  const gWaits = ({ g, type }) => (type === 'prediction' ? pmFindingsOf(pm, g) : [pm.findings.find(f => f.id === g.finding_id)].filter(Boolean)).filter(f => f.status !== 'confirmed');
+  const showFindings = !only || only.colId !== 'growth';
+  const queue = pm.findings.filter(f => f.status === 'candidate' && (!only || pmPlace(f) === section)).sort(pmSort);
+  const closed = pm.findings.filter(f => ['rejected', 'merged', 'retired'].includes(f.status));
+  const disputedList = only ? [] : pm.findings.filter(f => f.status === 'disputed').sort(pmSort);
+  const di = disputedList.findIndex(f => f.id === openD);
+  const dOpen = di >= 0 ? disputedList[di] : null;
+  const lastWord = (f) => [...(f.client_responses || [])].reverse().find(r => r.by === 'client');
+  const confirmed = pm.findings.filter(f => f.status === 'confirmed').length;
+  const open = pm.findings.find(f => f.id === openId);
+  const qi = queue.findIndex(f => f.id === openId);
+  const openAt = (id) => { order.current = queue.map(f => f.id); setOpenId(id); };
+  // After an action the finding leaves the queue: move on to the next one in the order it was opened from.
+  const advance = () => {
+    const ids = order.current, at = ids.indexOf(openId);
+    const nextId = ids.slice(at + 1).find(id => pm.findings.find(f => f.id === id)) || null;
+    setOpenId(nextId);
+  };
+
+  if (clientView) return (
+    <div className="fade-in">
+      <PmHeader eyebrow="PERSON MODEL" title="Review Queue" clientView={clientView} setClientView={setClientView} isCoach={isCoach} />
+      <div className="surface rounded-2xl p-8 text-center"><p className="text-dim reading">The review queue is coach-only. Open the model to see the client view.</p></div>
+    </div>
+  );
+
+  return (
+    <div className="fade-in">
+      <PmHeader eyebrow={only ? `PERSON MODEL · COACH · ${only.col.title.toUpperCase()}` : 'PERSON MODEL · COACH'} title={only ? `Review: ${only.sec.title}` : 'Review Queue'}
+        sub={only ? `Only this section's items. ${only.colId === 'growth' ? 'Accept' : 'Confirm'} or reject each one and the next opens.` : 'Candidates Claude proposed from the transcripts, most important first. Open one to read it exactly as the client would, then confirm, reword, merge or reject.'}
+        clientView={clientView} setClientView={setClientView} isCoach={isCoach} />
+      {only && (
+        <div className="flex gap-4 mb-5 text-sm">
+          <button onClick={() => onNav('/model/overview')} className="text-primary">← Back to the model</button>
+          <button onClick={() => onNav('/model/review')} className="text-faint">Show the whole queue</button>
+        </div>
+      )}
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        {[[queue.length + gQueue.length, 'To review', 'var(--secondary)'], [confirmed, 'Confirmed'], [closed.length, 'Rejected / merged']].map(([v, l, c]) => (
+          <div key={l} className="surface rounded-xl px-4 py-3"><div className="text-3xl font-light" style={{ color: c || 'var(--text)' }}>{v}</div><div className="text-[10px] tracking-[0.18em] text-faint mt-1 uppercase">{l}</div></div>
+        ))}
+      </div>
+
+      {only && queue.length === 0 && gQueue.length === 0
+        ? <div className="surface rounded-2xl p-8 text-center"><p className="text-dim reading">Nothing left to review in {only.sec.title}.</p>
+            <button onClick={() => onNav('/model/overview')} className="text-primary text-sm mt-2">Back to the model</button></div>
+        : !showFindings ? null
+        : queue.length === 0
+        ? <div className="surface rounded-2xl p-8 text-center"><p className="text-dim reading">No findings waiting. Run the person-model pass in Claude Code to propose candidates.</p>
+            {confirmed > 0 && <button onClick={() => onNav('/model/overview')} className="text-primary text-sm mt-2">Open the model</button>}</div>
+        : <div className="surface rounded-2xl p-2">
+            {queue.map((f, i) => (
+              <button key={f.id} onClick={() => openAt(f.id)} className="w-full text-left rounded-xl px-4 py-3 hover:bg-primary-soft transition flex gap-4 items-start" style={i ? { borderTop: '1px solid var(--border)' } : {}}>
+                <span className="text-faint text-xs font-mono pt-1 shrink-0 w-12">{f.code}</span>
+                <div className="flex-1 min-w-0">
+                  <p className={'leading-snug ' + (f.confidence === 'thin' ? 'italic' : '')}>{pmHeadline(f)}</p>
+                  <p className="text-faint text-xs mt-1">{PM_LENS[f.lens]} · {PM_TYPES[f.type]} · {f.domains.map(d => PM_DOMAINS[d]).join(', ')}</p>
+                </div>
+                <div className="flex gap-1.5 shrink-0 pt-0.5">
+                  <PmChip color={PM_IMP_COLOR[f.importance]}>{f.importance}</PmChip>
+                  <PmChip color={PM_CONF_COLOR[f.confidence]}>{f.confidence}</PmChip>
+                </div>
+              </button>
+            ))}
+          </div>}
+
+      {gQueue.length > 0 && (
+        <div className="mt-8">
+          <PmEyebrow color="#34d399">Growth proposals · {gQueue.length}</PmEyebrow>
+          <p className="text-faint text-xs mb-3">Predictions and interventions. Each can be accepted once the findings it rests on are confirmed.</p>
+          <div className="surface rounded-2xl p-2">
+            {gQueue.map((x, i) => {
+              const waits = gWaits(x);
+              return (
+                <button key={x.g.id} onClick={() => setOpenG(x.g.id)} className="w-full text-left rounded-xl px-4 py-3 hover:bg-primary-soft transition flex gap-4 items-start" style={i ? { borderTop: '1px solid var(--border)' } : {}}>
+                  <span className="text-faint text-xs font-mono pt-1 shrink-0 w-12">{x.g.code}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="leading-snug">{x.type === 'prediction' ? x.g.situation : x.g.opportunity}</p>
+                    <p className="text-faint text-xs mt-1">{x.type === 'prediction' ? `Prediction for ${pmShortDate(x.g.situation_date)}` : PM_KIND[x.g.kind]} · rests on {(x.type === 'prediction' ? pmFindingsOf(pm, x.g) : [pm.findings.find(f => f.id === x.g.finding_id)].filter(Boolean)).map(f => f.code).join(', ')}</p>
+                  </div>
+                  <div className="flex gap-1.5 shrink-0 pt-0.5">
+                    {waits.length ? <PmChip>Waits for {waits.map(f => f.code).join(', ')}</PmChip> : <PmChip color="#34d399">Ready</PmChip>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {gOpen && (
+        <PmReader crumbs={['Review Queue', only ? only.sec.title : 'Growth', gOpen.g.code, `${gi + 1} of ${gQueue.length}`]} onClose={() => setOpenG(null)}
+          prev={gi > 0 ? { label: gQueue[gi - 1].g.code, go: () => setOpenG(gQueue[gi - 1].g.id) } : null}
+          next={gi < gQueue.length - 1 ? { label: gQueue[gi + 1].g.code, go: () => setOpenG(gQueue[gi + 1].g.id) } : null}
+          footer={<PmGrowthReviewActions key={gOpen.g.id} g={gOpen.g} type={gOpen.type} pm={pm} onDone={() => setOpenG(gQueue[gi + 1]?.g.id || null)} />}>
+          <PmGrowthTitle g={gOpen.g} type={gOpen.type} clientView={false} color="#34d399" eyebrow={gOpen.type === 'prediction' ? 'Proposed prediction' : `Proposed ${PM_KIND[gOpen.g.kind].toLowerCase()}`} />
+          {gOpen.type === 'prediction' ? <PmPredictionBody p={gOpen.g} pm={pm} clientView={false} /> : <PmInterventionBody i={gOpen.g} pm={pm} clientView={false} />}
+        </PmReader>
+      )}
+
+      {!only && closed.length > 0 && (
+        <div className="mt-8">
+          <button onClick={() => setShowClosed(!showClosed)} className="text-sm text-faint">{showClosed ? 'Hide' : 'Show'} rejected and merged ({closed.length})</button>
+          {showClosed && (
+            <div className="space-y-2 mt-3">
+              {closed.map(f => (
+                <div key={f.id} className="surface-2 rounded-lg p-3 text-sm">
+                  <span className="text-faint font-mono text-xs mr-2">{f.code}</span>
+                  <span className="text-dim">{f.client_headline}</span>
+                  <span className="text-faint"> · {f.status === 'merged' ? `merged into ${pm.findings.find(x => x.id === f.merged_into)?.code || '?'}` : `rejected: ${f.reject_reason}`}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {disputedList.length > 0 && (
+        <div className="mt-8">
+          <PmEyebrow color="#f87171">The client's responses · {disputedList.length}</PmEyebrow>
+          <p className="text-faint text-xs mb-3">Findings the client said don't fit, or where they corrected a fact. They stay visible to the client, marked under review, until you keep, reword or retire them.</p>
+          <div className="surface rounded-2xl p-2">
+            {disputedList.map((f, i) => {
+              const w = lastWord(f);
+              return (
+                <button key={f.id} onClick={() => setOpenD(f.id)} className="w-full text-left rounded-xl px-4 py-3 hover:bg-primary-soft transition flex gap-4 items-start" style={i ? { borderTop: '1px solid var(--border)' } : {}}>
+                  <span className="text-faint text-xs font-mono pt-1 shrink-0 w-12">{f.code}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="leading-snug">{pmHeadline(f)}</p>
+                    {w && <p className="text-sm mt-1 italic" style={{ color: '#f87171' }}>{PM_RESPONSE_WORDS[w.kind].replace('You', 'Client')}{w.text ? `: "${w.text}"` : ''} <span className="text-faint not-italic text-xs">· {pmDate(w.at)}</span></p>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {dOpen && (
+        <PmReader crumbs={['Review Queue', 'Client responses', dOpen.code]} onClose={() => setOpenD(null)}
+          prev={di > 0 ? { label: disputedList[di - 1].code, go: () => setOpenD(disputedList[di - 1].id) } : null}
+          next={di < disputedList.length - 1 ? { label: disputedList[di + 1].code, go: () => setOpenD(disputedList[di + 1].id) } : null}
+          footer={<PmReviewActions key={dOpen.id} f={dOpen} pm={pm} disputed onDone={() => setOpenD(disputedList[di + 1]?.id || null)} />}>
+          <PmFindingTitle f={dOpen} clientView={false} eyebrow="Under review · the client responded" color="#f87171" />
+          <PmFindingBody f={dOpen} pm={pm} data={data} clientView={false} />
+        </PmReader>
+      )}
+
+      {open && open.status === 'candidate' && (
+        <PmReader crumbs={['Review Queue', ...(only ? [only.sec.title] : []), `${open.code}`, `${qi + 1} of ${queue.length}`]} onClose={() => setOpenId(null)}
+          prev={qi > 0 ? { label: `${queue[qi - 1].code}`, go: () => setOpenId(queue[qi - 1].id) } : null}
+          next={qi >= 0 && qi < queue.length - 1 ? { label: `${queue[qi + 1].code}`, go: () => setOpenId(queue[qi + 1].id) } : null}
+          footer={<PmReviewActions key={open.id} f={open} pm={pm} onDone={advance} />}>
+          <PmFindingTitle f={open} clientView={false} eyebrow={`Candidate · ${PM_LENS[open.lens]}`} color="var(--secondary)" />
+          <PmFindingBody f={open} pm={pm} data={data} clientView={false} />
+        </PmReader>
+      )}
+    </div>
+  );
+}
+
 function AppShell({ data, signOut, updateProfileField, updateData, coachees, coacheeId, activeFolder, setActiveFolder, authedEmail }) {
   const [kpiCount, setKpiCount] = useState(0);
   useEffect(() => {
@@ -3372,6 +4988,8 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
   useActivityTracking(coacheeId, authedEmail, route);
   const isCoach = isCoachEmail(authedEmail);
   const prep = usePreps(coacheeId);
+  const pm = usePersonModel(coacheeId, isCoach);
+  const clientRead = useClientRead(!isCoach);
   // Magic-link sign-in drops the URL hash, so a reminder-email link to #/prep
   // is remembered before login (see App) and resumed here.
   useEffect(() => {
@@ -3405,6 +5023,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
     if (seg === 'resource') return 'resources';
     if (seg === 'next') return 'next';
     if (seg === 'financials') return 'financials';
+    if (seg === 'model') return route.split('/')[2] === 'review' ? 'model-review' : 'model-overview';
     if (!seg) return 'overview';
     return seg;
   }, [route]);
@@ -3413,7 +5032,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
   const view = useMemo(() => {
     const parts = route.split('/').filter(Boolean);
     const seg = parts[0] || 'overview';
-    if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} />;
+    if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} readAvailable={clientRead.available && !isCoach} readConsented={clientRead.consented} />;
     if (seg === 'prep') return <PrepView prep={prep} isCoach={isCoach} />;
     if (seg === 'sessions') return <SessionsView data={data} onNav={go} route={route} unviewedIds={unviewedIds} authedEmail={authedEmail} />;
     if (seg === 'session' && parts[1]) return <SessionDetailView data={data} sessionId={parts[1]} onNav={go} actionItems={actionItems} cycleStatus={cycleStatus} markViewed={markViewed} authedEmail={authedEmail} activeFolder={activeFolder} />;
@@ -3428,13 +5047,19 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
     if (seg === 'notes') return <NotesView data={data} />;
     if (seg === 'financials') return <FinancialsView data={data} />;
     if (seg === 'kpis') return <KpisView coacheeId={coacheeId} authedEmail={authedEmail} />;
+    if (seg === 'model' && isCoach && parts[1] === 'review') {
+      const section = parts[2] && parts[3] ? `${parts[2]}/${parts[3]}` : null;
+      return <PmReviewView key={section || 'all'} section={section} data={data} pm={pm} isCoach={isCoach} onNav={go} />;
+    }
+    if (seg === 'model' && isCoach) return <PmOverview data={data} pm={pm} isCoach={isCoach} onNav={go} />;
+    if (seg === 'read' && !isCoach) return <PmClientRead data={data} cr={clientRead} onNav={go} />;
     if (seg === 'engagement' && isCoach) return <EngagementView onOpen={(folder) => { setActiveFolder(folder); go('/overview'); }} />;
     return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} />;
-  }, [route, data, actionItems, priorities, coacheeId, authedEmail, prep]);
+  }, [route, data, actionItems, priorities, coacheeId, authedEmail, prep, pm, clientRead]);
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount }} data={data} showKpis={showKpis} isCoach={isCoach} />
+      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount, 'model-review': isCoach ? pm.findings.filter(f => ['candidate', 'disputed'].includes(f.status)).length : 0 }} data={data} showKpis={showKpis} isCoach={isCoach} readAvailable={clientRead.available} />
       <div className="flex-1 flex flex-col main-content min-w-0">
         <TopBar profile={data.profile} onSearch={() => setSearchOpen(true)} onToggleTheme={toggleTheme} theme={theme} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />
         <main className="flex-1 p-5 md:p-10 overflow-y-auto" key={route}>
