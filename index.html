@@ -947,8 +947,9 @@ const NAV = [
   // The 'FINANCE' section is appended dynamically when data.financials.enabled is true.
 ];
 
-function buildNav(data, showKpis = false, isCoach = false) {
+function buildNav(data, showKpis = false, isCoach = false, readAvailable = false) {
   const nav = NAV.map(sec => ({ ...sec, items: [...sec.items] }));
+  if (readAvailable && !isCoach) nav[0].items.splice(1, 0, { id: 'read', icon: 'map', label: 'Your Read', route: '/read' });
   if (isCoach) {
     nav.unshift({ section: 'COACH', items: [
       { id: 'engagement', icon: 'users', label: 'Engagement', route: '/engagement' },
@@ -975,8 +976,8 @@ function buildNav(data, showKpis = false, isCoach = false) {
   return nav;
 }
 
-function Sidebar({ activeId, onNav, onSignOut, profile, badges = {}, data, showKpis = false, isCoach = false }) {
-  const sections = useMemo(() => buildNav(data, showKpis, isCoach), [data, showKpis, isCoach]);
+function Sidebar({ activeId, onNav, onSignOut, profile, badges = {}, data, showKpis = false, isCoach = false, readAvailable = false }) {
+  const sections = useMemo(() => buildNav(data, showKpis, isCoach, readAvailable), [data, showKpis, isCoach, readAvailable]);
   return (
     <aside className="desktop-sidebar w-60 surface flex flex-col flex-shrink-0" style={{ borderRadius: 0, borderTop: 0, borderBottom: 0, borderLeft: 0 }}>
       <div className="p-5 border-b border-default">
@@ -1173,7 +1174,7 @@ function EditableYearWord({ value, onSave }) {
   );
 }
 
-function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCoach }) {
+function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCoach, readAvailable, readConsented }) {
   const lastSession = useMemo(() => [...data.sessions].reverse().find(s => s.summaryMd && !s.summaryMd.startsWith('_No recap')), [data]);
   // Dual-company support: when data.companies is set, each company has its own engagement / evolutionArc / scorecard / nextQuarter.
   // Otherwise fall back to the legacy top-level fields.
@@ -1193,6 +1194,13 @@ function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCo
       </div>
 
       {prep && <PrepCard prep={prep} isCoach={isCoach} onNav={onNav} />}
+
+      {/* The client's read, once the coach has switched it on (also the way in on mobile, which has no sidebar) */}
+      {readAvailable && (
+        <div className="grid"><CTACard icon="map" title="Your read"
+          body={readConsented ? 'What we have learned about how you operate, from our sessions. Open any part to read it, and tell us where it doesn\'t fit.' : 'Dhiren has prepared a read of how you operate, built from our sessions. Open it when you have a quiet moment.'}
+          cta={readConsented ? 'Open your read →' : 'Take a look →'} onClick={() => onNav('/read')} /></div>
+      )}
 
       {/* Hero CTAs */}
       <HeroCTAs onNav={onNav} data={data} actionItems={actionItems} />
@@ -4120,6 +4128,12 @@ function PmFindingBody({ f, pm, data, clientView }) {
             <p>{PM_LENS[f.lens]} · {PM_TYPES[f.type]} · {f.domains.map(d => PM_DOMAINS[d]).join(', ')}</p>
             {f.client_question && <p>Shown as a question while Thin: <em>{f.client_question}</em></p>}
             <p>{[f.client_undervalues && 'Client undervalues it', f.works_against_aims && 'Works against own aims', f.coach_framed && 'Frame came from the coach'].filter(Boolean).join(' · ') || 'No flags'}</p>
+            {(f.client_responses || []).length > 0 && (
+              <div className="pt-2">
+                <p className="text-[var(--text)]">The client's responses</p>
+                {f.client_responses.map((r, i) => <p key={i}>{pmDate(r.at)} · {PM_RESPONSE_WORDS[r.kind]?.replace('You', 'Client') || r.kind}{r.text ? `: "${r.text}"` : ''}</p>)}
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -4267,8 +4281,9 @@ function PmClientAccess({ pm, name }) {
   );
 }
 
-function PmOverview({ data, pm, onNav, isCoach }) {
-  const [clientView, setClientView] = usePmClientView();
+function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
+  const [cvSaved, setClientView] = usePmClientView();
+  const clientView = !!forceClient || cvSaved;
   const [openKey, setOpenKey] = useState(null);
   if (pm.status === 'loading' || pm.status === 'idle') return <p className="text-faint text-sm">Loading…</p>;
   if (pm.status === 'error') return <p className="text-secondary text-sm">Couldn't load the model: {pm.error}</p>;
@@ -4322,7 +4337,7 @@ function PmOverview({ data, pm, onNav, isCoach }) {
             </button>
           )}
         </div>
-        {clientView && <p className="text-xs text-faint mt-3">Client view: confirmed findings only. Coach-only details are hidden. Clients cannot open this page themselves.</p>}
+        {clientView && !forceClient && <p className="text-xs text-faint mt-3">Client view: confirmed findings only, as {name} sees them in their own login once you switch it on.</p>}
       </div>
 
       {!clientView && candidates.length + proposalCount > 0 && (
@@ -4451,7 +4466,8 @@ function PmOverview({ data, pm, onNav, isCoach }) {
           onClose={() => setOpenKey(null)}
           prev={idx > 0 ? { label: label(pages[idx - 1]), go: () => setOpenKey(pages[idx - 1].key) } : null}
           next={idx < pages.length - 1 ? { label: label(pages[idx + 1]), go: () => setOpenKey(pages[idx + 1].key) } : null}
-          footer={page.g && !clientView ? <PmGrowthActions key={page.g.id} g={page.g} type={page.gType} pm={pm} data={data} /> : null}>
+          footer={page.g && !clientView ? <PmGrowthActions key={page.g.id} g={page.g} type={page.gType} pm={pm} data={data} />
+            : forceClient && page.f ? <PmRespond key={page.f.id} f={page.f} pm={pm} /> : null}>
           {page.f
             ? <><PmFindingTitle f={page.f} clientView={clientView} color={page.col.color} eyebrow={`${page.col.title} · ${page.sec.title}${page.of > 1 ? ` (${page.n} of ${page.of})` : ''}`} />
                 <PmFindingBody f={page.f} pm={pm} data={data} clientView={clientView} /></>
@@ -4469,7 +4485,224 @@ function PmOverview({ data, pm, onNav, isCoach }) {
   );
 }
 
-function PmReviewActions({ f, pm, onDone }) {
+// ── The client's own read (their login). Everything comes through pm_client_read(), which returns only
+// what the client may see, and only once the coach has switched it on and the client has agreed.
+const PM_CONSENT_VERSION = 'v1-2026-11';
+
+// Local preview only (?mock=<folder> without coach=1): imitates pm_client_read() from the preview file.
+function pmMockClientRead(m, st) {
+  if (!st.visible) return { available: false };
+  if (!st.consent_at) return { available: true, consented: false };
+  const vis = ['confirmed', 'disputed'];
+  const live = m.findings.filter(f => vis.includes(f.status));
+  const ids = new Set(live.map(f => f.id));
+  const confirmedAt = (id) => m.history.find(h => h.finding_id === id && h.field === 'status' && h.after === 'confirmed')?.changed_at;
+  return {
+    available: true, consented: true, consent_at: st.consent_at, delete_requested_at: st.delete_requested_at || null,
+    findings: live.map(f => ({ ...f, code: undefined, coach_framed: undefined, pattern_sequence: (f.pattern_sequence || []).map(x => ({ step: x.step, text: x.text })),
+      my_response: [...(f.client_responses || [])].reverse().find(r => r.by === 'client') || null })),
+    evidence: m.evidence.filter(e => ids.has(e.finding_id) && e.speaker === 'client').map(e => ({ id: e.id, finding_id: e.finding_id, session_id: e.session_id, quote: e.quote, class: e.class, is_counter: e.is_counter, speaker: 'client' })),
+    history: m.history.filter(h => ids.has(h.finding_id) && (h.field === 'created' || (['status', 'confidence', 'scope', 'exceptions', 'statement', 'client_headline'].includes(h.field) && confirmedAt(h.finding_id) && h.changed_at >= confirmedAt(h.finding_id))))
+      .map(h => ({ id: h.id, finding_id: h.finding_id, changed_at: h.changed_at, field: h.field, before: ['confidence', 'status'].includes(h.field) ? h.before : null, after: ['confidence', 'status'].includes(h.field) ? h.after : null })),
+    predictions: m.predictions.filter(p => p.shared_with_client && ['open', 'scored'].includes(p.status) && p.finding_ids.every(id => ids.has(id))),
+    interventions: m.interventions.filter(i => ['active', 'done'].includes(i.status) && ids.has(i.finding_id)),
+    sessions_read: [...new Set(m.runs.flatMap(r => r.sessions_read || []))],
+  };
+}
+
+function useClientRead(enabled) {
+  const [state, setState] = useState({ status: 'idle', r: null, error: null });
+  const mock = useRef(null);
+  const load = useCallback(async () => {
+    if (!enabled) return;
+    if (MOCK_FOLDER && !MOCK_COACH) {
+      if (!mock.current) {
+        const res = await fetch(`data/_preview/${MOCK_FOLDER}.pm.json?t=${Date.now()}`);
+        const m = res.ok ? await res.json() : null;
+        mock.current = { m, st: { visible: !!m, consent_at: null, delete_requested_at: null } };
+        if (m) for (const k of ['predictions', 'interventions', 'runs']) m[k] = m[k] || [];
+        window.__pmClientMock = mock.current;
+      }
+      const { m, st } = mock.current;
+      setState({ status: 'ready', r: m ? pmMockClientRead(m, st) : { available: false }, error: null });
+      return;
+    }
+    if (!sb) return;
+    const { data, error } = await sb.rpc('pm_client_read');
+    // An older database without the function, or any error, simply means no read is offered.
+    setState({ status: 'ready', r: error ? { available: false } : data, error: error ? error.message : null });
+  }, [enabled]);
+  useEffect(() => { load(); }, [load]);
+
+  const call = async (fn, args, mockFn) => {
+    if (MOCK_FOLDER && !MOCK_COACH) { mockFn(mock.current); await load(); return true; }
+    const { error } = await sb.rpc(fn, args);
+    if (error) throw new Error(error.message);
+    await load();
+    return true;
+  };
+  const consent = () => call('pm_client_consent', { version: PM_CONSENT_VERSION }, (c) => { c.st.consent_at = new Date().toISOString(); });
+  const requestDelete = () => call('pm_client_request_delete', {}, (c) => { c.st.delete_requested_at = c.st.delete_requested_at || new Date().toISOString(); });
+  const respond = (finding, kind, note) => call('pm_client_respond', { finding, kind, note: note || '' }, (c) => {
+    if (kind !== 'agree' && !String(note || '').trim()) throw new Error('Please say what does not fit');
+    const f = c.m.findings.find(x => x.id === finding);
+    f.client_responses = [...(f.client_responses || []), { kind, text: note || '', at: new Date().toISOString(), by: 'client' }];
+    if (kind !== 'agree') f.status = 'disputed';
+  });
+
+  // Shape it like usePersonModel so the same page and reader render it.
+  const pm = useMemo(() => {
+    const r = state.r;
+    if (!r || !r.consented) return null;
+    const ev = {}, hi = {};
+    r.evidence.forEach(e => { (ev[e.finding_id] = ev[e.finding_id] || []).push(e); });
+    r.history.forEach(h => { (hi[h.finding_id] = hi[h.finding_id] || []).push(h); });
+    return {
+      status: 'ready', error: null,
+      findings: r.findings.map(f => ({ ...f, code: '', domains: f.domains || [] })),
+      evidence: r.evidence, history: r.history, predictions: r.predictions, interventions: r.interventions,
+      growthHistory: [], settings: null,
+      runs: [{ sessions_read: r.sessions_read || [], created_at: null }],
+      evidenceFor: id => ev[id] || [], historyFor: id => hi[id] || [], growthHistoryFor: () => [],
+      respond,
+    };
+  }, [state.r]);
+
+  return { ...state, available: !!state.r?.available, consented: !!state.r?.consented, pm, consent, requestDelete, respond, reload: load };
+}
+
+// Shown once, before anything else. Nothing of the read is loaded until the client agrees.
+function PmConsent({ name, cr }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const agree = async () => { setBusy(true); setErr(''); const r = await pmAttempt(() => cr.consent()); setBusy(false); if (!r.ok) setErr(r.error); };
+  const points = [
+    ['What it is', 'A picture of how you operate, built from the transcripts of our sessions. It describes patterns, not who you are.'],
+    ['Who has checked it', 'Dhiren reads and confirms every part of it before you see it. Each part shows the moments it rests on, in your own words, and how sure we are.'],
+    ['Your say', 'If something doesn\'t fit, tell us right there. Your answer goes to Dhiren, and the read changes. Some parts are put to you as questions, because only you can settle them.'],
+    ['Who can see it', 'Only you and Dhiren. You can download it whenever you like, and ask for it to be deleted at any time.'],
+  ];
+  return (
+    <div className="fade-in max-w-2xl">
+      <p className="text-faint text-xs tracking-[0.2em] mb-2">YOUR READ</p>
+      <h1 className="text-3xl md:text-4xl font-bold mb-3">Before you open it</h1>
+      <p className="text-secondary italic reading mb-8" style={{ fontSize: '17px' }}>A few things to know, {name}.</p>
+      <div className="space-y-3 mb-8">
+        {points.map(([t, b], i) => (
+          <div key={t} className="surface rounded-xl p-5 flex gap-4 items-start">
+            <span className="w-8 h-8 rounded-full flex items-center justify-center font-bold flex-shrink-0 text-white" style={{ background: 'var(--primary)' }}>{i + 1}</span>
+            <div><h3 className="font-semibold">{t}</h3><p className="text-dim reading mt-1" style={{ fontSize: '15px' }}>{b}</p></div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-4 flex-wrap">
+        <button disabled={busy} onClick={agree} className="btn-primary px-5 py-2.5 rounded-lg font-semibold">I understand. Show me my read</button>
+        <PmSaveState busy={busy} err={err} />
+      </div>
+      <p className="text-faint text-xs mt-4">Not ready? You can come back to this any time from your Overview.</p>
+    </div>
+  );
+}
+
+// The client's response to one finding: agree, say it doesn't fit, or correct a fact.
+const PM_RESPONSE_WORDS = { agree: 'You said this fits', dispute: 'You said this doesn\'t fit', correct: 'You corrected a fact' };
+function PmRespond({ f, pm }) {
+  const [mode, setMode] = useState(null);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const send = async (kind) => {
+    setBusy(true); setErr('');
+    const r = await pmAttempt(() => pm.respond(f.id, kind, note.trim()));
+    setBusy(false);
+    if (r.ok) { setMode(null); setNote(''); } else setErr(r.error);
+  };
+  const mine = f.my_response;
+  return (
+    <div>
+      {mine && !mode && <p className="text-xs text-faint mb-2">{PM_RESPONSE_WORDS[mine.kind]} on {pmDate(mine.at)}{mine.text ? `: "${mine.text}"` : '.'}{f.status === 'disputed' ? ' Dhiren is looking at it.' : ''}</p>}
+      {mode && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <textarea autoFocus className="input flex-1" rows={2} style={{ minWidth: 220 }} value={note} onChange={e => setNote(e.target.value)}
+            placeholder={mode === 'dispute' ? 'What doesn\'t fit? A sentence is enough.' : 'What is the fact, as it actually was?'} />
+          <button disabled={busy || !note.trim()} onClick={() => send(mode)} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold" style={{ opacity: note.trim() ? 1 : 0.5 }}>Send to Dhiren</button>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 items-center">
+        <button disabled={busy} onClick={() => send('agree')} className="surface px-3 py-1.5 rounded-lg text-sm">This fits</button>
+        <button disabled={busy} onClick={() => setMode(mode === 'dispute' ? null : 'dispute')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'dispute' ? 'btn-primary' : 'surface')}>This isn't right</button>
+        <button disabled={busy} onClick={() => setMode(mode === 'correct' ? null : 'correct')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'correct' ? 'btn-primary' : 'surface')}>Correct a fact</button>
+        <PmSaveState busy={busy} err={err} />
+      </div>
+    </div>
+  );
+}
+
+// "Download my read": a plain, printable page the client can save as a PDF.
+function pmPrintRead(pm, data, name) {
+  const esc = (t) => String(t ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const visible = pm.findings.filter(f => PM_CLIENT_VISIBLE.includes(f.status));
+  const read = pmReadInfo(pm);
+  const growth = pmGrowth(pm, true);
+  let body = `<h1>Your read</h1><p class="sub">${read ? `Built from ${read.sessions} sessions, ${pmDay(read.first)} to ${pmDay(read.last)}.` : ''} Downloaded ${pmDate(new Date().toISOString())}.</p>`;
+  for (const col of PM_COLUMNS.filter(c => c.id !== 'growth')) {
+    const fs = visible.filter(f => pmPlace(f).startsWith(col.id + '/')).sort(pmSort);
+    if (!fs.length) continue;
+    body += `<h2>${esc(col.title)}</h2>`;
+    for (const f of fs) {
+      const qs = pm.evidenceFor(f.id).filter(e => !e.is_counter).slice(0, 3);
+      body += `<div class="f"><p class="tag">${esc(PM_CONF_LABEL[f.confidence])}${f.status === 'disputed' ? ' · under review' : ''}</p><h3>${esc(pmHeadline(f))}</h3><p>${esc(f.statement)}</p>`
+        + (f.mechanism ? `<p><b>What explains it:</b> ${esc(f.mechanism)}</p>` : '')
+        + (f.exceptions ? `<p><b>Exceptions:</b> ${esc(f.exceptions)}</p>` : '')
+        + qs.map(e => `<blockquote>"${esc(e.quote)}"<span>${esc(pmSessionLabel(data, e.session_id))}</span></blockquote>`).join('') + `</div>`;
+    }
+  }
+  const items = [...growth.prediction.map(p => ['Prediction', p.situation, p.expected]), ...[...growth.nudges, ...growth.interventions].map(i => [PM_KIND[i.kind], i.opportunity, i.action])];
+  if (items.length) body += `<h2>My Growth</h2>` + items.map(([k, t, d]) => `<div class="f"><p class="tag">${esc(k)}</p><h3>${esc(t)}</h3><p>${esc(d)}</p></div>`).join('');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Your read · ${esc(name)}</title><style>
+    body{font-family:Georgia,serif;max-width:720px;margin:40px auto;padding:0 24px;color:#1c1729;line-height:1.55}
+    h1{font-family:-apple-system,Helvetica,sans-serif;font-size:30px;margin:0 0 4px}h2{font-family:-apple-system,Helvetica,sans-serif;font-size:18px;margin:36px 0 12px;padding-left:10px;border-left:3px solid #7e3af2}
+    h3{font-family:-apple-system,Helvetica,sans-serif;font-size:16px;margin:2px 0 6px}.sub{color:#92400e;font-style:italic}.tag{font-family:-apple-system,Helvetica,sans-serif;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#7e3af2;margin:0}
+    .f{page-break-inside:avoid;margin:0 0 22px}blockquote{margin:8px 0;padding-left:12px;border-left:2px solid #92400e;font-style:italic}blockquote span{display:block;font-style:normal;font-size:12px;color:#5b5470}
+    @media print{body{margin:0}}</style></head><body>${body}</body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { alert('Your browser blocked the download window. Allow pop-ups for this page and try again.'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+  setTimeout(() => { try { w.focus(); w.print(); } catch {} }, 300);
+}
+
+function PmClientRead({ data, cr, onNav }) {
+  const name = data.profile?.preferredName || (data.profile?.name || '').split(' ')[0];
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  if (cr.status !== 'ready') return <p className="text-faint text-sm">Loading…</p>;
+  if (!cr.available) return (
+    <div className="surface rounded-2xl p-8 text-center fade-in"><p className="text-dim reading">Your read isn't available yet. Dhiren will let you know when it is.</p>
+      <button onClick={() => onNav('/overview')} className="text-primary text-sm mt-2">Back to your Overview</button></div>
+  );
+  if (!cr.consented) return <PmConsent name={name} cr={cr} />;
+  const askDelete = async () => {
+    if (!window.confirm('Ask Dhiren to delete your read?\n\nYour read stays visible until Dhiren has deleted it.')) return;
+    setBusy(true); setErr(''); const r = await pmAttempt(() => cr.requestDelete()); setBusy(false); if (!r.ok) setErr(r.error);
+  };
+  return (
+    <div className="space-y-10">
+      <PmOverview data={data} pm={cr.pm} onNav={onNav} isCoach={false} forceClient />
+      <div className="surface rounded-2xl p-5 flex items-center gap-3 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-sm">Your copy, your choice</p>
+          <p className="text-faint text-sm mt-0.5">{cr.r.delete_requested_at ? `You asked for your read to be deleted on ${pmDate(cr.r.delete_requested_at)}. Dhiren will take care of it.` : 'Download your read to keep, or ask for it to be deleted.'}</p>
+          <PmSaveState busy={busy} err={err} />
+        </div>
+        <button onClick={() => pmPrintRead(cr.pm, data, name)} className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold">Download my read</button>
+        {!cr.r.delete_requested_at && <button disabled={busy} onClick={askDelete} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Ask to delete</button>}
+      </div>
+    </div>
+  );
+}
+
+// disputed: the client said it doesn't fit or corrected a fact. Keep, reword, or retire (framework: Under review).
+function PmReviewActions({ f, pm, onDone, disputed }) {
   const [mode, setMode] = useState(null); // 'reword' | 'reject' | 'merge'
   const [draft, setDraft] = useState({ client_headline: f.client_headline, client_question: f.client_question || '', statement: f.statement, confidence: f.confidence, importance: f.importance });
   const [reason, setReason] = useState('');
@@ -4508,8 +4741,8 @@ function PmReviewActions({ f, pm, onDone }) {
       {mode === 'reject' && (
         <div className="mb-3 flex gap-2 flex-wrap">
           <input autoFocus className="input flex-1" style={{ minWidth: 220 }} placeholder="Why? (kept, so the same reading isn't proposed again)" value={reason} onChange={e => setReason(e.target.value)} />
-          <button disabled={busy || !reason.trim()} onClick={() => run(() => pm.update(f.id, { status: 'rejected', reject_reason: reason.trim() }, reason.trim()), true)}
-            className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#f87171', color: 'white', opacity: reason.trim() ? 1 : 0.5 }}>Reject</button>
+          <button disabled={busy || !reason.trim()} onClick={() => run(() => pm.update(f.id, { status: disputed ? 'retired' : 'rejected', reject_reason: reason.trim() }, reason.trim()), true)}
+            className="px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#f87171', color: 'white', opacity: reason.trim() ? 1 : 0.5 }}>{disputed ? 'Retire' : 'Reject'}</button>
         </div>
       )}
       {mode === 'merge' && (
@@ -4524,13 +4757,13 @@ function PmReviewActions({ f, pm, onDone }) {
         </div>
       )}
       <div className="flex flex-wrap gap-2 items-center">
-        <button disabled={busy} onClick={() => run(() => pm.update(f.id, { ...changed(), status: 'confirmed' }, mode === 'reword' ? 'Reworded and confirmed by coach' : 'Confirmed by coach'), true)}
-          className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold">{mode === 'reword' ? 'Save and confirm' : 'Confirm'}</button>
+        <button disabled={busy} onClick={() => run(() => pm.update(f.id, { ...changed(), status: 'confirmed' }, disputed ? (mode === 'reword' ? 'Reworded after the client\'s response' : 'Kept after the client\'s response') : mode === 'reword' ? 'Reworded and confirmed by coach' : 'Confirmed by coach'), true)}
+          className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold">{mode === 'reword' ? 'Save and confirm' : disputed ? 'Keep as is' : 'Confirm'}</button>
         <button disabled={busy} onClick={() => setMode(mode === 'reword' ? null : 'reword')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'reword' ? 'btn-primary' : 'surface')}>Reword</button>
-        <button disabled={busy} onClick={() => setMode(mode === 'merge' ? null : 'merge')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'merge' ? 'btn-primary' : 'surface')}>Merge</button>
-        <button disabled={busy} onClick={() => setMode(mode === 'reject' ? null : 'reject')} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Reject</button>
+        {!disputed && <button disabled={busy} onClick={() => setMode(mode === 'merge' ? null : 'merge')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'merge' ? 'btn-primary' : 'surface')}>Merge</button>}
+        <button disabled={busy} onClick={() => setMode(mode === 'reject' ? null : 'reject')} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>{disputed ? 'Retire' : 'Reject'}</button>
         <PmSaveState busy={busy} err={err} />
-        <span className="text-faint text-xs ml-auto hidden md:inline">Confirming shows it to the client</span>
+        <span className="text-faint text-xs ml-auto hidden md:inline">{disputed ? 'Keeping or rewording clears "under review" for the client' : 'Confirming shows it to the client'}</span>
       </div>
     </div>
   );
@@ -4562,6 +4795,7 @@ function PmReviewView({ data, pm, isCoach, onNav, section }) {
   const [openId, setOpenId] = useState(null);
   const [showClosed, setShowClosed] = useState(false);
   const [openG, setOpenG] = useState(null);
+  const [openD, setOpenD] = useState(null);
   const order = useRef([]);
   const only = pmSectionOf(section);
   const autoOpened = useRef(false);
@@ -4581,7 +4815,11 @@ function PmReviewView({ data, pm, isCoach, onNav, section }) {
   const gWaits = ({ g, type }) => (type === 'prediction' ? pmFindingsOf(pm, g) : [pm.findings.find(f => f.id === g.finding_id)].filter(Boolean)).filter(f => f.status !== 'confirmed');
   const showFindings = !only || only.colId !== 'growth';
   const queue = pm.findings.filter(f => f.status === 'candidate' && (!only || pmPlace(f) === section)).sort(pmSort);
-  const closed = pm.findings.filter(f => ['rejected', 'merged'].includes(f.status));
+  const closed = pm.findings.filter(f => ['rejected', 'merged', 'retired'].includes(f.status));
+  const disputedList = only ? [] : pm.findings.filter(f => f.status === 'disputed').sort(pmSort);
+  const di = disputedList.findIndex(f => f.id === openD);
+  const dOpen = di >= 0 ? disputedList[di] : null;
+  const lastWord = (f) => [...(f.client_responses || [])].reverse().find(r => r.by === 'client');
   const confirmed = pm.findings.filter(f => f.status === 'confirmed').length;
   const open = pm.findings.find(f => f.id === openId);
   const qi = queue.findIndex(f => f.id === openId);
@@ -4691,6 +4929,37 @@ function PmReviewView({ data, pm, isCoach, onNav, section }) {
         </div>
       )}
 
+      {disputedList.length > 0 && (
+        <div className="mt-8">
+          <PmEyebrow color="#f87171">The client's responses · {disputedList.length}</PmEyebrow>
+          <p className="text-faint text-xs mb-3">Findings the client said don't fit, or where they corrected a fact. They stay visible to the client, marked under review, until you keep, reword or retire them.</p>
+          <div className="surface rounded-2xl p-2">
+            {disputedList.map((f, i) => {
+              const w = lastWord(f);
+              return (
+                <button key={f.id} onClick={() => setOpenD(f.id)} className="w-full text-left rounded-xl px-4 py-3 hover:bg-primary-soft transition flex gap-4 items-start" style={i ? { borderTop: '1px solid var(--border)' } : {}}>
+                  <span className="text-faint text-xs font-mono pt-1 shrink-0 w-12">{f.code}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="leading-snug">{pmHeadline(f)}</p>
+                    {w && <p className="text-sm mt-1 italic" style={{ color: '#f87171' }}>{PM_RESPONSE_WORDS[w.kind].replace('You', 'Client')}{w.text ? `: "${w.text}"` : ''} <span className="text-faint not-italic text-xs">· {pmDate(w.at)}</span></p>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {dOpen && (
+        <PmReader crumbs={['Review Queue', 'Client responses', dOpen.code]} onClose={() => setOpenD(null)}
+          prev={di > 0 ? { label: disputedList[di - 1].code, go: () => setOpenD(disputedList[di - 1].id) } : null}
+          next={di < disputedList.length - 1 ? { label: disputedList[di + 1].code, go: () => setOpenD(disputedList[di + 1].id) } : null}
+          footer={<PmReviewActions key={dOpen.id} f={dOpen} pm={pm} disputed onDone={() => setOpenD(disputedList[di + 1]?.id || null)} />}>
+          <PmFindingTitle f={dOpen} clientView={false} eyebrow="Under review · the client responded" color="#f87171" />
+          <PmFindingBody f={dOpen} pm={pm} data={data} clientView={false} />
+        </PmReader>
+      )}
+
       {open && open.status === 'candidate' && (
         <PmReader crumbs={['Review Queue', ...(only ? [only.sec.title] : []), `${open.code}`, `${qi + 1} of ${queue.length}`]} onClose={() => setOpenId(null)}
           prev={qi > 0 ? { label: `${queue[qi - 1].code}`, go: () => setOpenId(queue[qi - 1].id) } : null}
@@ -4720,6 +4989,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
   const isCoach = isCoachEmail(authedEmail);
   const prep = usePreps(coacheeId);
   const pm = usePersonModel(coacheeId, isCoach);
+  const clientRead = useClientRead(!isCoach);
   // Magic-link sign-in drops the URL hash, so a reminder-email link to #/prep
   // is remembered before login (see App) and resumed here.
   useEffect(() => {
@@ -4762,7 +5032,7 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
   const view = useMemo(() => {
     const parts = route.split('/').filter(Boolean);
     const seg = parts[0] || 'overview';
-    if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} />;
+    if (seg === 'overview') return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} readAvailable={clientRead.available && !isCoach} readConsented={clientRead.consented} />;
     if (seg === 'prep') return <PrepView prep={prep} isCoach={isCoach} />;
     if (seg === 'sessions') return <SessionsView data={data} onNav={go} route={route} unviewedIds={unviewedIds} authedEmail={authedEmail} />;
     if (seg === 'session' && parts[1]) return <SessionDetailView data={data} sessionId={parts[1]} onNav={go} actionItems={actionItems} cycleStatus={cycleStatus} markViewed={markViewed} authedEmail={authedEmail} activeFolder={activeFolder} />;
@@ -4782,13 +5052,14 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
       return <PmReviewView key={section || 'all'} section={section} data={data} pm={pm} isCoach={isCoach} onNav={go} />;
     }
     if (seg === 'model' && isCoach) return <PmOverview data={data} pm={pm} isCoach={isCoach} onNav={go} />;
+    if (seg === 'read' && !isCoach) return <PmClientRead data={data} cr={clientRead} onNav={go} />;
     if (seg === 'engagement' && isCoach) return <EngagementView onOpen={(folder) => { setActiveFolder(folder); go('/overview'); }} />;
     return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} />;
-  }, [route, data, actionItems, priorities, coacheeId, authedEmail, prep, pm]);
+  }, [route, data, actionItems, priorities, coacheeId, authedEmail, prep, pm, clientRead]);
 
   return (
     <div className="flex min-h-screen">
-      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount, 'model-review': isCoach ? pm.findings.filter(f => f.status === 'candidate').length : 0 }} data={data} showKpis={showKpis} isCoach={isCoach} />
+      <Sidebar activeId={activeId} onNav={go} onSignOut={signOut} profile={data.profile} badges={{ sessions: unviewedCount, 'model-review': isCoach ? pm.findings.filter(f => ['candidate', 'disputed'].includes(f.status)).length : 0 }} data={data} showKpis={showKpis} isCoach={isCoach} readAvailable={clientRead.available} />
       <div className="flex-1 flex flex-col main-content min-w-0">
         <TopBar profile={data.profile} onSearch={() => setSearchOpen(true)} onToggleTheme={toggleTheme} theme={theme} coachees={coachees} activeFolder={activeFolder} setActiveFolder={setActiveFolder} />
         <main className="flex-1 p-5 md:p-10 overflow-y-auto" key={route}>
