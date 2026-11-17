@@ -3893,7 +3893,15 @@ function PmGrowthActions({ g, type, pm, data }) {
 }
 
 // One Growth section on the overview: predictions, nudges, interventions, or My Evolution.
-function PmGrowthCard({ sec, col, items, waiting, clientView, open }) {
+// "N to review": goes straight to this section's items in the Review Queue, first one open.
+// A chip sits inside a card that is itself a button, so the click must not also open the card.
+function PmReviewLink({ n, to, onNav, chip }) {
+  const go = (e) => { e.stopPropagation(); onNav(to); };
+  if (chip) return <span role="link" tabIndex={0} onClick={go} onKeyDown={e => e.key === 'Enter' && go(e)} className="cursor-pointer hover:underline"><PmChip color="#d97706">{n} to review →</PmChip></span>;
+  return <button onClick={go} className="text-[11px] mt-2 hover:underline" style={{ color: '#d97706' }}>+ {n} waiting for review →</button>;
+}
+
+function PmGrowthCard({ sec, col, items, waiting, clientView, open, onNav }) {
   const isEvo = sec.id === 'evolution';
   if (!items.length) return (
     <button onClick={() => open(isEvo ? 'growth/evolution' : `growth/${sec.id}`)} className="text-left rounded-xl p-3.5 hover:bg-primary-soft transition" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--border)' }}>
@@ -3901,7 +3909,7 @@ function PmGrowthCard({ sec, col, items, waiting, clientView, open }) {
       <p className="text-faint text-xs mt-1 leading-relaxed">{sec.line}</p>
       <div className="flex gap-2 mt-2 flex-wrap">
         <PmChip>Not yet</PmChip>
-        {waiting > 0 && <PmChip color="#d97706">{waiting} to review</PmChip>}
+        {waiting > 0 && <PmReviewLink n={waiting} to={`/model/review/growth/${sec.id}`} onNav={onNav} chip />}
       </div>
     </button>
   );
@@ -3927,7 +3935,7 @@ function PmGrowthCard({ sec, col, items, waiting, clientView, open }) {
             </button>
           ))}
       </div>
-      {waiting > 0 && <p className="text-[11px] mt-2" style={{ color: '#d97706' }}>+ {waiting} waiting for review</p>}
+      {waiting > 0 && <PmReviewLink n={waiting} to={`/model/review/growth/${sec.id}`} onNav={onNav} />}
     </div>
   );
 }
@@ -4117,7 +4125,7 @@ function PmEmptyBody({ col, sec, clientView, pending, onNav }) {
           ? <p>{clientView ? 'This part is built from findings we have looked at together. It fills in once there are some.' : 'Nothing accepted here yet. Proposals wait in the Review Queue and can be accepted once the findings they rest on are confirmed.'}</p>
           : <p><strong className="text-[var(--text)]">Nothing here yet.</strong> {clientView ? 'We do not fill an area just to have something to show.' : 'No confirmed finding in this section.'}</p>}
         {!clientView && pending > 0 && (
-          <button onClick={() => onNav('/model/review')} className="text-primary text-sm mt-3 block">{pending} candidate{pending === 1 ? '' : 's'} for this section waiting in the Review Queue</button>
+          <button onClick={() => onNav(`/model/review/${col.id}/${sec.id}`)} className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold mt-3 block">Review {pending === 1 ? 'it' : `these ${pending}`} now</button>
         )}
       </PmBlock>
     </>
@@ -4242,7 +4250,7 @@ function PmOverview({ data, pm, onNav, isCoach }) {
               {secs.map(sec => {
                 if (col.id === 'growth') return (
                   <PmGrowthCard key={sec.id} sec={sec} col={col} items={sec.id === 'evolution' ? growth.evolution : growth[sec.id]} waiting={clientView ? 0 : proposals[sec.id]}
-                    clientView={clientView} open={(k) => setOpenKey(k)} />
+                    clientView={clientView} open={(k) => setOpenKey(k)} onNav={onNav} />
                 );
                 const items = visible.filter(pmIn(col, sec)).sort(pmSort);
                 const waiting = candidates.filter(pmIn(col, sec)).length;
@@ -4252,7 +4260,7 @@ function PmOverview({ data, pm, onNav, isCoach }) {
                     <p className="text-faint text-xs mt-1 leading-relaxed">{sec.line}</p>
                     <div className="flex gap-2 mt-2 flex-wrap">
                       <PmChip>{col.id === 'growth' ? 'Not yet' : 'Nothing yet'}</PmChip>
-                      {!clientView && waiting > 0 && <PmChip color="#d97706">{waiting} to review</PmChip>}
+                      {!clientView && waiting > 0 && <PmReviewLink n={waiting} to={`/model/review/${col.id}/${sec.id}`} onNav={onNav} chip />}
                     </div>
                   </button>
                 );
@@ -4271,7 +4279,7 @@ function PmOverview({ data, pm, onNav, isCoach }) {
                         </button>
                       ))}
                     </div>
-                    {!clientView && waiting > 0 && <p className="text-[11px] mt-2" style={{ color: '#d97706' }}>+ {waiting} waiting for review</p>}
+                    {!clientView && waiting > 0 && <PmReviewLink n={waiting} to={`/model/review/${col.id}/${sec.id}`} onNav={onNav} />}
                   </div>
                 );
               })}
@@ -4370,23 +4378,51 @@ function PmReviewActions({ f, pm, onDone }) {
   );
 }
 
-function PmReviewView({ data, pm, isCoach, onNav }) {
+// Growth proposals, optionally only those for one Growth section (prediction / nudges / interventions).
+function pmGrowthProposals(pm, secId) {
+  const all = [
+    ...pm.predictions.filter(p => p.status === 'proposed').map(g => ({ g, type: 'prediction' })),
+    ...pm.interventions.filter(i => i.status === 'proposed').map(g => ({ g, type: 'intervention' })),
+  ];
+  if (!secId) return all;
+  return all.filter(x => secId === 'prediction' ? x.type === 'prediction'
+    : secId === 'nudges' ? x.type === 'intervention' && x.g.kind === 'nudge'
+    : secId === 'interventions' ? x.type === 'intervention' && x.g.kind !== 'nudge' : false);
+}
+const pmSectionOf = (section) => {
+  if (!section) return null;
+  const [colId, secId] = section.split('/');
+  const col = PM_COLUMNS.find(c => c.id === colId);
+  const sec = (colId === 'growth' ? PM_GROWTH_SECTIONS : PM_SECTIONS[colId] || []).find(x => x.id === secId);
+  return col && sec ? { colId, secId, col, sec } : null;
+};
+
+// section: "insights/gaps", "growth/nudges", … when opened from a section's "to review" link. Then only that
+// section's items are listed and the first one opens straight away; previous / next stay within the section.
+function PmReviewView({ data, pm, isCoach, onNav, section }) {
   const [clientView, setClientView] = usePmClientView();
   const [openId, setOpenId] = useState(null);
   const [showClosed, setShowClosed] = useState(false);
   const [openG, setOpenG] = useState(null);
   const order = useRef([]);
+  const only = pmSectionOf(section);
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (!only || pm.status !== 'ready' || autoOpened.current) return;
+    autoOpened.current = true;
+    if (only.colId === 'growth') { const first = pmGrowthProposals(pm, only.secId)[0]; if (first) setOpenG(first.g.id); return; }
+    const q = pm.findings.filter(f => f.status === 'candidate' && pmPlace(f) === section).sort(pmSort);
+    if (q[0]) { order.current = q.map(f => f.id); setOpenId(q[0].id); }
+  }, [section, pm.status]);
   if (pm.status === 'loading' || pm.status === 'idle') return <p className="text-faint text-sm">Loading…</p>;
   if (pm.status === 'error') return <p className="text-secondary text-sm">Couldn't load the model: {pm.error}</p>;
 
-  const gQueue = [
-    ...pm.predictions.filter(p => p.status === 'proposed').map(g => ({ g, type: 'prediction' })),
-    ...pm.interventions.filter(i => i.status === 'proposed').map(g => ({ g, type: 'intervention' })),
-  ];
+  const gQueue = !only ? pmGrowthProposals(pm) : only.colId === 'growth' ? pmGrowthProposals(pm, only.secId) : [];
   const gi = gQueue.findIndex(x => x.g.id === openG);
   const gOpen = gi >= 0 ? gQueue[gi] : null;
   const gWaits = ({ g, type }) => (type === 'prediction' ? pmFindingsOf(pm, g) : [pm.findings.find(f => f.id === g.finding_id)].filter(Boolean)).filter(f => f.status !== 'confirmed');
-  const queue = pm.findings.filter(f => f.status === 'candidate').sort(pmSort);
+  const showFindings = !only || only.colId !== 'growth';
+  const queue = pm.findings.filter(f => f.status === 'candidate' && (!only || pmPlace(f) === section)).sort(pmSort);
   const closed = pm.findings.filter(f => ['rejected', 'merged'].includes(f.status));
   const confirmed = pm.findings.filter(f => f.status === 'confirmed').length;
   const open = pm.findings.find(f => f.id === openId);
@@ -4408,16 +4444,26 @@ function PmReviewView({ data, pm, isCoach, onNav }) {
 
   return (
     <div className="fade-in">
-      <PmHeader eyebrow="PERSON MODEL · COACH" title="Review Queue"
-        sub="Candidates Claude proposed from the transcripts, most important first. Open one to read it exactly as the client would, then confirm, reword, merge or reject."
+      <PmHeader eyebrow={only ? `PERSON MODEL · COACH · ${only.col.title.toUpperCase()}` : 'PERSON MODEL · COACH'} title={only ? `Review: ${only.sec.title}` : 'Review Queue'}
+        sub={only ? `Only this section's items. ${only.colId === 'growth' ? 'Accept' : 'Confirm'} or reject each one and the next opens.` : 'Candidates Claude proposed from the transcripts, most important first. Open one to read it exactly as the client would, then confirm, reword, merge or reject.'}
         clientView={clientView} setClientView={setClientView} isCoach={isCoach} />
+      {only && (
+        <div className="flex gap-4 mb-5 text-sm">
+          <button onClick={() => onNav('/model/overview')} className="text-primary">← Back to the model</button>
+          <button onClick={() => onNav('/model/review')} className="text-faint">Show the whole queue</button>
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-3 mb-6">
         {[[queue.length + gQueue.length, 'To review', 'var(--secondary)'], [confirmed, 'Confirmed'], [closed.length, 'Rejected / merged']].map(([v, l, c]) => (
           <div key={l} className="surface rounded-xl px-4 py-3"><div className="text-3xl font-light" style={{ color: c || 'var(--text)' }}>{v}</div><div className="text-[10px] tracking-[0.18em] text-faint mt-1 uppercase">{l}</div></div>
         ))}
       </div>
 
-      {queue.length === 0
+      {only && queue.length === 0 && gQueue.length === 0
+        ? <div className="surface rounded-2xl p-8 text-center"><p className="text-dim reading">Nothing left to review in {only.sec.title}.</p>
+            <button onClick={() => onNav('/model/overview')} className="text-primary text-sm mt-2">Back to the model</button></div>
+        : !showFindings ? null
+        : queue.length === 0
         ? <div className="surface rounded-2xl p-8 text-center"><p className="text-dim reading">No findings waiting. Run the person-model pass in Claude Code to propose candidates.</p>
             {confirmed > 0 && <button onClick={() => onNav('/model/overview')} className="text-primary text-sm mt-2">Open the model</button>}</div>
         : <div className="surface rounded-2xl p-2">
@@ -4461,7 +4507,7 @@ function PmReviewView({ data, pm, isCoach, onNav }) {
       )}
 
       {gOpen && (
-        <PmReader crumbs={['Review Queue', 'Growth', gOpen.g.code]} onClose={() => setOpenG(null)}
+        <PmReader crumbs={['Review Queue', only ? only.sec.title : 'Growth', gOpen.g.code, `${gi + 1} of ${gQueue.length}`]} onClose={() => setOpenG(null)}
           prev={gi > 0 ? { label: gQueue[gi - 1].g.code, go: () => setOpenG(gQueue[gi - 1].g.id) } : null}
           next={gi < gQueue.length - 1 ? { label: gQueue[gi + 1].g.code, go: () => setOpenG(gQueue[gi + 1].g.id) } : null}
           footer={<PmGrowthReviewActions key={gOpen.g.id} g={gOpen.g} type={gOpen.type} pm={pm} onDone={() => setOpenG(gQueue[gi + 1]?.g.id || null)} />}>
@@ -4470,7 +4516,7 @@ function PmReviewView({ data, pm, isCoach, onNav }) {
         </PmReader>
       )}
 
-      {closed.length > 0 && (
+      {!only && closed.length > 0 && (
         <div className="mt-8">
           <button onClick={() => setShowClosed(!showClosed)} className="text-sm text-faint">{showClosed ? 'Hide' : 'Show'} rejected and merged ({closed.length})</button>
           {showClosed && (
@@ -4488,7 +4534,7 @@ function PmReviewView({ data, pm, isCoach, onNav }) {
       )}
 
       {open && open.status === 'candidate' && (
-        <PmReader crumbs={['Review Queue', `${open.code}`, `${qi + 1} of ${queue.length}`]} onClose={() => setOpenId(null)}
+        <PmReader crumbs={['Review Queue', ...(only ? [only.sec.title] : []), `${open.code}`, `${qi + 1} of ${queue.length}`]} onClose={() => setOpenId(null)}
           prev={qi > 0 ? { label: `${queue[qi - 1].code}`, go: () => setOpenId(queue[qi - 1].id) } : null}
           next={qi >= 0 && qi < queue.length - 1 ? { label: `${queue[qi + 1].code}`, go: () => setOpenId(queue[qi + 1].id) } : null}
           footer={<PmReviewActions key={open.id} f={open} pm={pm} onDone={advance} />}>
@@ -4573,7 +4619,10 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
     if (seg === 'notes') return <NotesView data={data} />;
     if (seg === 'financials') return <FinancialsView data={data} />;
     if (seg === 'kpis') return <KpisView coacheeId={coacheeId} authedEmail={authedEmail} />;
-    if (seg === 'model' && isCoach && parts[1] === 'review') return <PmReviewView data={data} pm={pm} isCoach={isCoach} onNav={go} />;
+    if (seg === 'model' && isCoach && parts[1] === 'review') {
+      const section = parts[2] && parts[3] ? `${parts[2]}/${parts[3]}` : null;
+      return <PmReviewView key={section || 'all'} section={section} data={data} pm={pm} isCoach={isCoach} onNav={go} />;
+    }
     if (seg === 'model' && isCoach) return <PmOverview data={data} pm={pm} isCoach={isCoach} onNav={go} />;
     if (seg === 'engagement' && isCoach) return <EngagementView onOpen={(folder) => { setActiveFolder(folder); go('/overview'); }} />;
     return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} />;
