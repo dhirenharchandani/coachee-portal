@@ -3573,12 +3573,15 @@ function usePmClientView() {
   return [on, set];
 }
 
-function pmSessionLabel(data, sessionId) {
+function pmSessionDate(data, sessionId) {
   const s = (data.sessions || []).find(x => x.id === sessionId);
   // Sessions from before the dashboard (older transcripts) carry their date in the id.
   const date = s ? s.date : (/^\d{4}-\d{2}-\d{2}/.test(sessionId || '') ? sessionId.slice(0, 10) : null);
-  if (!date) return sessionId;
-  const d = new Date(date + 'T12:00:00');
+  return date ? new Date(date + 'T12:00:00') : null;
+}
+function pmSessionLabel(data, sessionId) {
+  const d = pmSessionDate(data, sessionId);
+  if (!d) return sessionId;
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 function pmDate(ts) { return new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); }
@@ -4030,17 +4033,24 @@ function PmCoachChips({ f }) {
   </>;
 }
 
-// "How sure", spelled out from what the record stores (confidence, episodes, scope).
-function pmHowSure(f) {
+// "How sure", spelled out only from what the record stores, so every line is checkable:
+// the supporting quotes' session dates (when it was talked about, not when it happened),
+// the confidence level, whether an alternative is on record, and whether the frame came from the coach.
+function pmHowSure(f, support, data) {
   const n = f.episodes || 0;
-  const seen = n <= 1 ? 'one occasion so far' : n === 2 ? 'two separate occasions' : `${n} separate occasions`;
+  const seen = n <= 1 ? 'one situation so far' : `${n} separate situations`;
+  const dates = [...new Set(support.map(e => e.session_id))].map(id => pmSessionDate(data, id)).filter(Boolean).sort((a, b) => a - b);
+  const month = d => d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+  // The session counts are already shown under "When it happened"; here only the span, which can differ
+  // from when things happened (one situation can be retold in a later session).
+  const first = dates.length ? month(dates[0]) : null, last = dates.length ? month(dates[dates.length - 1]) : null;
+  const span = !first ? '' : first === last ? `, talked about in ${first}` : `, talked about between ${first} and ${last}`;
   return [
-    ['That it happens', `seen on ${seen}.`],
+    ['That it happens', `seen in ${seen}${span}.`],
     ['That it recurs', f.confidence === 'solid' ? 'sure: seen in more than one setting, with known exceptions.'
-      : f.confidence === 'live' ? 'reasonably sure, though another explanation still stands.'
+      : f.confidence === 'live' ? (f.alternative ? 'reasonably sure, though another explanation still stands (see "What explains it").' : 'reasonably sure, though not yet tested against another explanation.')
       : 'low. Treat this as a question to test, not a conclusion.'],
-    ['Where it applies', f.scope ? 'described above.' : 'not yet narrowed.'],
-    ['Why it happens', 'a working explanation, not yet tested.'],
+    ['Why it happens', f.coach_framed ? 'a frame Dhiren offered, not yet tested.' : 'a possible explanation, not yet tested.'],
   ];
 }
 
@@ -4114,7 +4124,7 @@ function PmFindingBody({ f, pm, data, clientView }) {
       <section className="mb-7">
         <PmEyebrow>How sure</PmEyebrow>
         <ul className="reading text-dim space-y-1" style={{ fontSize: '16px' }}>
-          {pmHowSure(f).map(([k, v]) => <li key={k}><span className="text-[var(--text)]">{k}: </span>{v}</li>)}
+          {pmHowSure(f, support, data).map(([k, v]) => <li key={k}><span className="text-[var(--text)]">{k}: </span>{v}</li>)}
         </ul>
       </section>
 
