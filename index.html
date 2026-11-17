@@ -1284,7 +1284,7 @@ function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCo
               <span className="text-faint">→</span>
             </div>
             {lastSession.keyTakeaway && (
-              <p className="text-secondary italic reading border-l-2 pl-4 mt-4" style={{ borderColor: 'var(--secondary)', fontSize: '16px' }}>
+              <p className="italic reading border-l-2 pl-4 mt-4" style={{ borderColor: 'var(--secondary)', color: 'var(--text)', fontSize: '16px' }}>
                 {lastSession.keyTakeaway}
               </p>
             )}
@@ -1527,7 +1527,7 @@ function SessionDetailView({ data, sessionId, onNav, actionItems, cycleStatus, m
       {session.keyTakeaway && (
         <div className="surface rounded-xl p-5 mb-8 border-l-4" style={{ borderColor: 'var(--secondary)' }}>
           <p className="text-xs tracking-widest text-faint mb-2">KEY TAKEAWAY</p>
-          <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>{session.keyTakeaway}</p>
+          <p className="italic reading" style={{ color: 'var(--text)', fontSize: '17px' }}>{session.keyTakeaway}</p>
         </div>
       )}
 
