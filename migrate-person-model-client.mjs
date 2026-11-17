@@ -85,6 +85,10 @@ const step = (t) => console.log(`\n--- ${t} ---`);
             'mechanism', f.mechanism, 'alternative', f.alternative, 'counter_evidence', f.counter_evidence,
             'scope', f.scope, 'exceptions', f.exceptions, 'confidence', f.confidence, 'importance', f.importance,
             'episodes', f.episodes, 'status', f.status,
+            -- Links only to findings the client can also see.
+            'related', coalesce((SELECT jsonb_agg(r) FROM unnest(f.related) r
+                                 WHERE r IN (SELECT g.id FROM public.pm_findings g
+                                             WHERE g.coachee_id = cid AND g.status IN ('confirmed','disputed'))), '[]'::jsonb),
             'works_against_aims', f.works_against_aims, 'client_undervalues', f.client_undervalues,
             'my_response', (SELECT x - 'by' FROM jsonb_array_elements(f.client_responses) WITH ORDINALITY t(x, n)
                             WHERE x->>'by' = 'client' ORDER BY n DESC LIMIT 1)))

@@ -4079,6 +4079,8 @@ function PmFindingBody({ f, pm, data, clientView }) {
   const sessions = new Set(support.map(e => e.session_id)).size;
   const seq = Array.isArray(f.pattern_sequence) ? f.pattern_sequence : [];
   const result = seq.find(s => s.step === 'consequence');
+  const related = (f.related || []).map(id => (pm.findings || []).find(x => x.id === id))
+    .filter(x => x && (clientView ? ['confirmed', 'disputed'].includes(x.status) : !['rejected', 'merged', 'retired'].includes(x.status)));
   return (
     <>
       <PmBlock title="What happens">
@@ -4108,6 +4110,16 @@ function PmFindingBody({ f, pm, data, clientView }) {
         <p>{f.mechanism || 'Not yet worked out.'}</p>
         {f.alternative && <p className="mt-3"><span className="text-[var(--text)]">Another explanation: </span>{f.alternative}</p>}
       </PmBlock>
+
+      {/* Links between findings. Only findings this viewer can see are listed (the client read sends only theirs). */}
+      {related.length > 0 && (
+        <section className="mb-7">
+          <PmEyebrow>Connected to</PmEyebrow>
+          <ul className="reading text-dim space-y-1" style={{ fontSize: '16px' }}>
+            {related.map(r => <li key={r.id}>{!clientView && <span className="text-faint text-xs font-mono mr-2">{r.code}</span>}{r.client_headline}</li>)}
+          </ul>
+        </section>
+      )}
 
       <section className="mb-7">
         <PmEyebrow>When it does not apply</PmEyebrow>
@@ -4537,7 +4549,7 @@ function pmMockClientRead(m, st) {
   const confirmedAt = (id) => m.history.find(h => h.finding_id === id && h.field === 'status' && h.after === 'confirmed')?.changed_at;
   return {
     available: true, consented: true, consent_at: st.consent_at, delete_requested_at: st.delete_requested_at || null,
-    findings: live.map(f => ({ ...f, code: undefined, coach_framed: undefined, pattern_sequence: (f.pattern_sequence || []).map(x => ({ step: x.step, text: x.text })),
+    findings: live.map(f => ({ ...f, code: undefined, coach_framed: undefined, related: (f.related || []).filter(id => ids.has(id)), pattern_sequence: (f.pattern_sequence || []).map(x => ({ step: x.step, text: x.text })),
       my_response: [...(f.client_responses || [])].reverse().find(r => r.by === 'client') || null })),
     evidence: m.evidence.filter(e => ids.has(e.finding_id) && e.speaker === 'client').map(e => ({ id: e.id, finding_id: e.finding_id, session_id: e.session_id, quote: e.quote, class: e.class, is_counter: e.is_counter, speaker: 'client' })),
     history: m.history.filter(h => ids.has(h.finding_id) && (h.field === 'created' || (['status', 'confidence', 'scope', 'exceptions', 'statement', 'client_headline'].includes(h.field) && confirmedAt(h.finding_id) && h.changed_at >= confirmedAt(h.finding_id))))

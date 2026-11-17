@@ -24,7 +24,8 @@
 //       "set": { "episodes"?, "confidence"?, "counter_evidence"?, "scope"?, "exceptions"?, "statement"?, "mechanism"?,
 //                "alternative"?, "client_headline"?, "client_question"?, "importance"?, "pattern_sequence"?, "domains"?,
 //                "type"?, "lens"?,          // a finding set to type 'loop' needs a full five-step pattern_sequence
-//                "client_undervalues"?, "coach_framed"?, "works_against_aims"? },   // booleans
+//                "client_undervalues"?, "coach_framed"?, "works_against_aims"?,    // booleans
+//                "related"? },               // codes of connected findings, e.g. ["F-003"]; replaces the list
 //       "merge_into"?: "F-003",           // mark this finding merged into another (coach-approved only). Its evidence
 //                                         // is NOT moved: add what the survivor needs to the survivor's own update
 //       "evidence": [ same shape as above ],  // added to the finding; each quote checked word for word
@@ -152,7 +153,7 @@ function gate(f, transcripts, clientNames) {
 
   // Updates to existing findings: same quote checks, but a finding the coach has already acted on is never touched.
   const UPDATABLE = ['episodes', 'confidence', 'counter_evidence', 'scope', 'exceptions', 'statement', 'mechanism', 'alternative',
-    'client_headline', 'client_question', 'importance', 'pattern_sequence', 'domains', 'type', 'lens', 'client_undervalues', 'coach_framed', 'works_against_aims'];
+    'client_headline', 'client_question', 'importance', 'pattern_sequence', 'domains', 'type', 'lens', 'client_undervalues', 'coach_framed', 'works_against_aims', 'related'];
   const BOOLS = ['client_undervalues', 'coach_framed', 'works_against_aims'];
   const TYPES = ['characteristic', 'strength', 'vulnerability', 'self_perception_gap', 'loop', 'connection', 'conflict', 'impact_on_others'];
   const existing = new Map((await sql(`SELECT id, code, status, type, pattern_sequence FROM public.pm_findings WHERE coachee_id = '${coachee.id}'`)).map(r => [r.code, r]));
@@ -176,6 +177,10 @@ function gate(f, transcripts, clientNames) {
       if (LOOP_STEPS.some(st => !seq.map(x => x.step).includes(st))) reasons.push('loop without all five steps');
     }
     for (const k of BOOLS) if (u.set?.[k] !== undefined && typeof u.set[k] !== 'boolean') reasons.push(`${k} must be true or false`);
+    if (u.set?.related !== undefined) {
+      const bad = (Array.isArray(u.set.related) ? u.set.related : [null]).filter(c => !existing.get(c) || c === u.code);
+      if (bad.length) reasons.push(`related: no such other finding ${bad.join(', ')}`);
+    }
     if (u.merge_into) {
       if (!COACH_APPROVED) reasons.push('merge_into needs --coach-approved');
       else if (!existing.get(u.merge_into) || u.merge_into === u.code) reasons.push(`merge_into: no other finding ${u.merge_into}`);
@@ -255,6 +260,7 @@ function gate(f, transcripts, clientNames) {
       if (k === 'pattern_sequence') return `pattern_sequence = x->'set'->'pattern_sequence'`;
       if (k === 'domains') return `domains = ARRAY(SELECT jsonb_array_elements_text(x->'set'->'domains'))`;
       if (BOOLS.includes(k)) return `${k} = (x->'set'->>'${k}')::boolean`;
+      if (k === 'related') return `related = ARRAY[${set.related.map(c => `'${existing.get(c).id}'::uuid`).join(', ')}]::uuid[]`;
       return `${k} = x->'set'->>'${k}'`;
     });
     const removed = (u.remove_evidence || []).map(r => `${r.session_id} "${norm(r.quote).slice(0, 60)}"`);
