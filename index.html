@@ -3466,7 +3466,7 @@ function usePersonModel(coacheeId, enabled) {
       await load(); return true;
     }
     const { error } = await sb.from('pm_findings').update({ ...patch, last_change_reason: reason || null }).eq('id', id);
-    if (error) { alert('Could not save: ' + error.message); return false; }
+    if (error) throw new Error('Could not save: ' + error.message);
     await load();
     return true;
   };
@@ -3479,7 +3479,7 @@ function usePersonModel(coacheeId, enabled) {
       return update(fromId, { status: 'merged', merged_into: intoId }, reason || `Merged into ${into?.code}`);
     }
     const ev = await sb.from('pm_evidence').update({ finding_id: intoId }).eq('finding_id', fromId);
-    if (ev.error) { alert('Could not move evidence: ' + ev.error.message); return false; }
+    if (ev.error) throw new Error('Could not move evidence: ' + ev.error.message);
     await sb.from('pm_findings').update({ last_change_reason: `Absorbed ${from?.code}: ${reason || 'merged in review'}`, episodes: (into?.episodes || 0) + (from?.episodes || 0) }).eq('id', intoId);
     return update(fromId, { status: 'merged', merged_into: intoId }, reason || `Merged into ${into?.code}`);
   };
@@ -3497,7 +3497,7 @@ function usePersonModel(coacheeId, enabled) {
       await load(); return true;
     }
     const { error } = await sb.from(table).update({ ...patch, last_change_reason: reason || null }).eq('id', id);
-    if (error) { alert('Could not save: ' + error.message.replace(/^pm_(predictions|interventions): /, '')); return false; }
+    if (error) throw new Error('Could not save: ' + error.message.replace(/^pm_(predictions|interventions): /, ''));
     await load();
     return true;
   };
@@ -3512,6 +3512,24 @@ function usePersonModel(coacheeId, enabled) {
 
   return { ...state, evidenceFor: id => byFinding.ev[id] || [], historyFor: id => byFinding.hi[id] || [], growthHistoryFor: id => byFinding.gh[id] || [],
     update, merge, updateGrowth, reload: load };
+}
+
+// Every save in the person model goes through this: it can't leave buttons stuck, it gives up after 20s
+// with a clear message, and the caller shows the error in the panel instead of failing silently.
+async function pmAttempt(fn, ms = 20000) {
+  let t;
+  try {
+    const ok = await Promise.race([fn(), new Promise((_, rej) => { t = setTimeout(() => rej(new Error('No response from the server after 20 seconds. Reload the page and try again. If it keeps happening, sign out and back in.')), ms); })]);
+    return { ok: ok !== false };
+  } catch (e) {
+    console.error('[person model]', e);
+    return { ok: false, error: (e && e.message) || String(e) };
+  } finally { clearTimeout(t); }
+}
+function PmSaveState({ busy, err }) {
+  if (busy) return <span className="text-xs text-faint">Saving…</span>;
+  if (err) return <span className="text-xs w-full" style={{ color: '#f87171' }}>{err}</span>;
+  return null;
 }
 
 function usePmClientView() {
@@ -3824,7 +3842,8 @@ function PmGrowthActions({ g, type, pm, data }) {
   const [note, setNote] = useState('');
   const [sessionId, setSessionId] = useState('');
   const [busy, setBusy] = useState(false);
-  const run = async (fn) => { setBusy(true); const ok = await fn(); setBusy(false); if (ok) { setMode(null); setNote(''); } };
+  const [err, setErr] = useState('');
+  const run = async (fn) => { setBusy(true); setErr(''); const r = await pmAttempt(fn); setBusy(false); if (r.ok) { setMode(null); setNote(''); } else setErr(r.error); };
   const sessions = (data.sessions || []).filter(s => s.date >= (g.created_at || '').slice(0, 10)).slice(-8);
   if (type === 'prediction') {
     if (g.status !== 'open') return <p className="text-faint text-xs">Scored{g.scored_at ? ` on ${pmDate(g.scored_at)}` : ''}. A scored prediction stays as it is.</p>;
@@ -3847,6 +3866,7 @@ function PmGrowthActions({ g, type, pm, data }) {
         <div className="flex flex-wrap gap-2 items-center">
           <button disabled={busy} onClick={() => setMode(mode === 'score' ? null : 'score')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'score' ? 'btn-primary' : 'surface')}>Score it</button>
           {!g.shared_with_client && <button disabled={busy} onClick={() => run(() => pm.updateGrowth('prediction', g.id, { shared_with_client: true }, 'Shared with the client'))} className="surface px-3 py-1.5 rounded-lg text-sm">Mark as shared with client</button>}
+          <PmSaveState busy={busy} err={err} />
           <span className="text-faint text-xs ml-auto hidden md:inline">{g.shared_with_client ? 'Shared: the client sees it' : 'Not shared: the client does not see it'}</span>
         </div>
       </div>
@@ -3865,6 +3885,7 @@ function PmGrowthActions({ g, type, pm, data }) {
       <div className="flex flex-wrap gap-2 items-center">
         <button disabled={busy} onClick={() => setMode(mode === 'done' ? null : 'done')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'done' ? 'btn-primary' : 'surface')}>Record result</button>
         <button disabled={busy} onClick={() => setMode(mode === 'drop' ? null : 'drop')} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Drop</button>
+        <PmSaveState busy={busy} err={err} />
         <span className="text-faint text-xs ml-auto hidden md:inline">Active: the client sees it</span>
       </div>
     </div>
@@ -3918,7 +3939,8 @@ function PmGrowthReviewActions({ g, type, pm, onDone }) {
   const [busy, setBusy] = useState(false);
   const fs = type === 'prediction' ? pmFindingsOf(pm, g) : [pm.findings.find(f => f.id === g.finding_id)].filter(Boolean);
   const blockers = fs.filter(f => f.status !== 'confirmed' || (type === 'prediction' && !['live', 'solid'].includes(f.confidence)));
-  const run = async (fn) => { setBusy(true); const ok = await fn(); setBusy(false); if (ok) onDone(); };
+  const [err, setErr] = useState('');
+  const run = async (fn) => { setBusy(true); setErr(''); const r = await pmAttempt(fn); setBusy(false); if (r.ok) onDone(); else setErr(r.error); };
   return (
     <div>
       {rejecting && (
@@ -3932,6 +3954,7 @@ function PmGrowthReviewActions({ g, type, pm, onDone }) {
         <button disabled={busy || blockers.length > 0} onClick={() => run(() => pm.updateGrowth(type, g.id, { status: type === 'prediction' ? 'open' : 'active' }, 'Accepted by coach'))}
           className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold" style={{ opacity: blockers.length ? 0.45 : 1 }}>Accept</button>
         <button disabled={busy} onClick={() => setRejecting(!rejecting)} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Reject</button>
+        <PmSaveState busy={busy} err={err} />
         <span className="text-faint text-xs ml-auto">
           {blockers.length
             ? `Confirm ${blockers.map(f => f.code).join(', ')} first${type === 'prediction' && blockers.some(f => !['live', 'solid'].includes(f.confidence)) ? ' (predictions need Live or Solid)' : ''}`
@@ -4287,7 +4310,8 @@ function PmReviewActions({ f, pm, onDone }) {
   const [target, setTarget] = useState('');
   const [busy, setBusy] = useState(false);
   const targets = pm.findings.filter(x => x.id !== f.id && ['confirmed', 'disputed', 'candidate'].includes(x.status));
-  const run = async (fn, leaves) => { setBusy(true); const ok = await fn(); setBusy(false); if (ok) { setMode(null); if (leaves) onDone(); } };
+  const [err, setErr] = useState('');
+  const run = async (fn, leaves) => { setBusy(true); setErr(''); const r = await pmAttempt(fn); setBusy(false); if (r.ok) { setMode(null); if (leaves) onDone(); } else setErr(r.error); };
   const changed = () => {
     const p = {};
     for (const k of Object.keys(draft)) {
@@ -4339,6 +4363,7 @@ function PmReviewActions({ f, pm, onDone }) {
         <button disabled={busy} onClick={() => setMode(mode === 'reword' ? null : 'reword')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'reword' ? 'btn-primary' : 'surface')}>Reword</button>
         <button disabled={busy} onClick={() => setMode(mode === 'merge' ? null : 'merge')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'merge' ? 'btn-primary' : 'surface')}>Merge</button>
         <button disabled={busy} onClick={() => setMode(mode === 'reject' ? null : 'reject')} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>Reject</button>
+        <PmSaveState busy={busy} err={err} />
         <span className="text-faint text-xs ml-auto hidden md:inline">Confirming shows it to the client</span>
       </div>
     </div>
