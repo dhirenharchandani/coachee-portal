@@ -17,6 +17,13 @@
 //       "mechanism", "episodes", "counter_evidence", "alternative", "scope", "exceptions",
 //       "confidence", "importance", "coach_framed", "client_undervalues", "works_against_aims",
 //       "evidence": [ { "session_id", "quote", "class": "direct|self_report|inference", "is_counter"?, "episode"?, "note"? } ]
+//   } ],
+//   "updates": [ {                        // run card: new sessions update existing findings before creating new ones
+//       "code": "F-007",                  // existing finding; only findings still at status 'candidate' are changed
+//       "reason": "...",                  // required; logged against every changed field in pm_finding_history
+//       "set": { "episodes"?, "confidence"?, "counter_evidence"?, "scope"?, "exceptions"?, "statement"?, "mechanism"?,
+//                "alternative"?, "client_headline"?, "client_question"?, "importance"?, "pattern_sequence"?, "domains"? },
+//       "evidence": [ same shape as above ]   // added to the finding; each quote checked word for word
 //   } ]
 // }
 
@@ -134,8 +141,39 @@ function gate(f, transcripts, clientNames) {
     else toSave.push({ f, evidence });
   }
 
+  // Updates to existing findings: same quote checks, but a finding the coach has already acted on is never touched.
+  const UPDATABLE = ['episodes', 'confidence', 'counter_evidence', 'scope', 'exceptions', 'statement', 'mechanism', 'alternative',
+    'client_headline', 'client_question', 'importance', 'pattern_sequence', 'domains'];
+  const existing = new Map((await sql(`SELECT id, code, status FROM public.pm_findings WHERE coachee_id = '${coachee.id}'`)).map(r => [r.code, r]));
+  results.updated = []; results.update_rejected = [];
+  const toUpdate = [];
+  for (const u of p.updates || []) {
+    const reasons = [];
+    const row = existing.get(u.code);
+    if (!row) reasons.push(`no finding ${u.code}`);
+    else if (row.status !== 'candidate') reasons.push(`${u.code} is ${row.status}; the coach owns it now`);
+    if (!u.reason || !u.reason.trim()) reasons.push('missing reason');
+    const bad = Object.keys(u.set || {}).filter(k => !UPDATABLE.includes(k));
+    if (bad.length) reasons.push(`fields not updatable here: ${bad.join(', ')}`);
+    if (u.set?.counter_evidence !== undefined && !String(u.set.counter_evidence).trim()) reasons.push('counter-evidence blank');
+    if (u.set?.alternative !== undefined && !String(u.set.alternative).trim()) reasons.push('alternative blank');
+    const ev = [];
+    for (const e of u.evidence || []) {
+      const t = transcripts.get(e.session_id);
+      if (!t) { reasons.push(`no stored transcript for session ${e.session_id}`); continue; }
+      if (norm(e.quote).split(' ').length > 40) { reasons.push(`quote over 40 words in ${e.session_id}`); continue; }
+      const loc = locate(e.quote, t.utts);
+      if (loc.error) { reasons.push(`${e.session_id}: ${loc.error}: "${norm(e.quote).slice(0, 70)}"`); continue; }
+      if (!e.is_counter && loc.speaker !== 'client') { reasons.push(`${e.session_id}: supporting quote is not in the client's words (${loc.speaker}): "${norm(e.quote).slice(0, 50)}"`); continue; }
+      ev.push({ ...e, transcript_id: t.id, speaker: loc.speaker });
+    }
+    if (reasons.length) results.update_rejected.push({ code: u.code, reasons });
+    else toUpdate.push({ u, row, evidence: ev });
+  }
+
   if (DRY) {
     results.accepted = toSave.map(x => ({ headline: x.f.client_headline, quotes: x.evidence.map(e => `${e.session_id} [${e.speaker}] ${norm(e.quote).slice(0, 50)}`) }));
+    results.updated = toUpdate.map(x => ({ code: x.u.code, set: Object.keys(x.u.set || {}), quotes: x.evidence.map(e => `${e.session_id} [${e.speaker}${e.is_counter ? ', counter' : ''}] ${norm(e.quote).slice(0, 50)}`) }));
     console.log(JSON.stringify({ dry: true, ...results }, null, 2));
     return;
   }
@@ -174,6 +212,26 @@ function gate(f, transcripts, clientNames) {
         FROM (SELECT ${J(e)} AS x) s`);
     }
     results.accepted.push({ code, headline: f.client_headline, quotes: evidence.length });
+  }
+
+  const insertEvidence = (findingId, e) => sql(`
+    INSERT INTO public.pm_evidence (finding_id, transcript_id, session_id, speaker, quote, class, is_counter, episode, note)
+    SELECT '${findingId}', (x->>'transcript_id')::bigint, x->>'session_id', x->>'speaker', x->>'quote', x->>'class',
+           coalesce((x->>'is_counter')::boolean, false), x->>'episode', x->>'note'
+    FROM (SELECT ${J(e)} AS x) s`);
+  for (const { u, row, evidence } of toUpdate) {
+    const set = u.set || {};
+    const cols = Object.keys(set).map(k => {
+      if (k === 'episodes') return `episodes = (x->'set'->>'episodes')::int`;
+      if (k === 'pattern_sequence') return `pattern_sequence = x->'set'->'pattern_sequence'`;
+      if (k === 'domains') return `domains = ARRAY(SELECT jsonb_array_elements_text(x->'set'->'domains'))`;
+      return `${k} = x->'set'->>'${k}'`;
+    });
+    const reason = `${u.reason} (Claude, ${p.run?.kind || 'manual'})`;
+    await sql(`UPDATE public.pm_findings f SET ${[...cols, `last_change_reason = x->>'reason'`].join(', ')}
+      FROM (SELECT ${J({ set, reason })} AS x) s WHERE f.id = '${row.id}' AND f.status = 'candidate'`);
+    for (const e of evidence) await insertEvidence(row.id, e);
+    results.updated.push({ code: u.code, fields: Object.keys(set), quotes_added: evidence.length });
   }
   console.log(JSON.stringify({ run: runId, ...results }, null, 2));
 })().catch(e => { console.error(e.message); process.exit(1); });
