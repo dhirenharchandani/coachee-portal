@@ -3416,19 +3416,19 @@ const PM_SECTIONS = {
 };
 
 function usePersonModel(coacheeId, enabled) {
-  const [state, setState] = useState({ status: 'idle', findings: [], evidence: [], history: [], predictions: [], interventions: [], growthHistory: [], error: null });
+  const [state, setState] = useState({ status: 'idle', findings: [], evidence: [], history: [], predictions: [], interventions: [], growthHistory: [], runs: [], error: null });
   const mock = useRef(null);
   const load = useCallback(async () => {
     if (enabled && MOCK_COACH) {
       if (!mock.current) {
         const r = await fetch(`data/_preview/${MOCK_FOLDER}.pm.json?t=${Date.now()}`);
         mock.current = r.ok ? await r.json() : { findings: [], evidence: [], history: [], transcripts: {} };
-        for (const k of ['predictions', 'interventions', 'growth_history']) mock.current[k] = mock.current[k] || [];
+        for (const k of ['predictions', 'interventions', 'growth_history', 'runs']) mock.current[k] = mock.current[k] || [];
         window.__pmMock = mock.current;
       }
       const m = mock.current;
       setState({ status: 'ready', findings: [...m.findings], evidence: [...m.evidence], history: [...m.history],
-        predictions: [...m.predictions], interventions: [...m.interventions], growthHistory: [...m.growth_history], error: null });
+        predictions: [...m.predictions], interventions: [...m.interventions], growthHistory: [...m.growth_history], runs: [...m.runs], error: null });
       return;
     }
     if (!enabled || !sb || !coacheeId) return;
@@ -3445,14 +3445,15 @@ function usePersonModel(coacheeId, enabled) {
       if (ev.error || hi.error) { setState(s => ({ ...s, status: 'error', error: (ev.error || hi.error).message })); return; }
       evidence = ev.data || []; history = hi.data || [];
     }
-    const [pr, iv, gh] = await Promise.all([
+    const [pr, iv, gh, ru] = await Promise.all([
       sb.from('pm_predictions').select('*').eq('coachee_id', coacheeId).order('code'),
       sb.from('pm_interventions').select('*').eq('coachee_id', coacheeId).order('code'),
       sb.from('pm_growth_history').select('*').eq('coachee_id', coacheeId).order('changed_at'),
+      sb.from('pm_runs').select('id, kind, sessions_read, created_at').eq('coachee_id', coacheeId).order('created_at'),
     ]);
     // Growth tables may not exist yet on an older database; the rest of the model still loads.
     setState({ status: 'ready', findings: findings || [], evidence, history,
-      predictions: pr.data || [], interventions: iv.data || [], growthHistory: gh.data || [], error: null });
+      predictions: pr.data || [], interventions: iv.data || [], growthHistory: gh.data || [], runs: ru.data || [], error: null });
   }, [coacheeId, enabled]);
   useEffect(() => { load(); }, [load]);
 
@@ -3897,7 +3898,7 @@ function PmGrowthActions({ g, type, pm, data }) {
 // A chip sits inside a card that is itself a button, so the click must not also open the card.
 function PmReviewLink({ n, to, onNav, chip }) {
   const go = (e) => { e.stopPropagation(); onNav(to); };
-  if (chip) return <span role="link" tabIndex={0} onClick={go} onKeyDown={e => e.key === 'Enter' && go(e)} className="cursor-pointer hover:underline"><PmChip color="#d97706">{n} to review →</PmChip></span>;
+  if (chip) return <span role="link" tabIndex={0} onClick={go} onKeyDown={e => e.key === 'Enter' && go(e)} className="cursor-pointer hover:underline shrink-0 whitespace-nowrap"><PmChip color="#d97706">{n} to review →</PmChip></span>;
   return <button onClick={go} className="text-[11px] mt-2 hover:underline" style={{ color: '#d97706' }}>+ {n} waiting for review →</button>;
 }
 
@@ -3989,7 +3990,6 @@ function PmBlock({ title, children }) {
 function PmCoachChips({ f }) {
   return <>
     <span className="text-faint text-xs font-mono">{f.code}</span>
-    <PmChip color={PM_CONF_COLOR[f.confidence]} title="Confidence">{f.confidence}</PmChip>
     <PmChip color={PM_IMP_COLOR[f.importance]} title="Importance">{f.importance}</PmChip>
     <PmChip>{PM_TYPES[f.type]}</PmChip>
     {f.coach_framed && <PmChip color="#fbbf24" title="The frame came from the coach">Coach-framed</PmChip>}
@@ -4014,8 +4014,8 @@ function pmHowSure(f) {
 function PmQuote({ e, data, clientView }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="rounded-xl p-4 mb-3" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
-      <p className="reading" style={{ fontSize: '16px', lineHeight: 1.6 }}>"{e.quote}"</p>
+    <div className="mb-5 pl-4" style={{ borderLeft: `2px solid ${e.is_counter ? 'var(--border)' : 'var(--secondary)'}` }}>
+      <p className="reading italic" style={{ fontSize: '16px', lineHeight: 1.6, color: 'var(--text)' }}>"{e.quote}"</p>
       <div className="flex items-center gap-2 flex-wrap mt-2">
         <span className="text-faint text-xs">{pmSessionLabel(data, e.session_id)}</span>
         <PmChip>{PM_CLASS[e.class] || e.class}</PmChip>
@@ -4133,7 +4133,7 @@ function PmEmptyBody({ col, sec, clientView, pending, onNav }) {
 }
 
 // The reader: overlay panel with breadcrumb, close, and previous / next (also ← → and Esc).
-function PmReader({ crumbs, onClose, prev, next, footer, children }) {
+function PmReader({ crumbs, onClose, prev, next, footer, children, accent }) {
   const body = useRef(null);
   useEffect(() => {
     const k = (e) => {
@@ -4149,7 +4149,7 @@ function PmReader({ crumbs, onClose, prev, next, footer, children }) {
   useEffect(() => { const o = document.body.style.overflow; document.body.style.overflow = 'hidden'; return () => { document.body.style.overflow = o; }; }, []);
   return (
     <div className="fixed inset-0 z-50 flex items-stretch md:items-center justify-center md:p-8" style={{ background: 'rgba(8,6,14,0.72)', backdropFilter: 'blur(3px)' }} onClick={onClose}>
-      <div className="w-full max-w-3xl flex flex-col md:rounded-2xl overflow-hidden" style={{ background: 'var(--surface)', border: '1px solid var(--border)', maxHeight: '100%' }} onClick={e => e.stopPropagation()}>
+      <div className="w-full max-w-3xl flex flex-col md:rounded-2xl overflow-hidden" style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderTop: `3px solid ${accent || 'var(--primary)'}`, maxHeight: '100%' }} onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3 px-5 md:px-7 py-3.5" style={{ borderBottom: '1px solid var(--border)' }}>
           <p className="text-xs text-faint flex-1 min-w-0 truncate">
             {crumbs.map((c, i) => <span key={i}>{i > 0 && <span className="mx-1.5">›</span>}<span className={i === crumbs.length - 1 ? 'text-[var(--text)]' : ''}>{c}</span></span>)}
@@ -4174,11 +4174,56 @@ function PmFindingTitle({ f, clientView, eyebrow, color }) {
     <div className="mb-8">
       <PmEyebrow color={color}>{eyebrow}</PmEyebrow>
       <div className="flex items-center gap-2 flex-wrap mb-3">
-        {asQuestion && <PmChip color="#fbbf24" title="Thin evidence: shown to the client as a question, not a statement">A question to test</PmChip>}
+        <PmSure c={f.confidence} />
         {f.status === 'disputed' && <PmChip color="#f87171">Under review</PmChip>}
         {!clientView && <PmCoachChips f={f} />}
       </div>
       <h2 className={'text-2xl font-bold leading-snug ' + (asQuestion ? 'italic' : '')}>{pmHeadline(f)}</h2>
+    </div>
+  );
+}
+
+// How sure, in words the client can read without learning our labels (from "The Read").
+const PM_CONF_LABEL = { solid: 'Established', live: 'Emerging possibility', thin: 'Question' };
+const PM_CONF_HINT = { solid: 'seen in more than one setting, with known exceptions', live: 'seen more than once; another explanation still stands', thin: 'your answer could settle it' };
+const PM_CONF_DOTS = { thin: 1, live: 2, solid: 3 };
+
+function PmSure({ c, small }) {
+  const n = PM_CONF_DOTS[c] || 0, color = PM_CONF_COLOR[c];
+  return (
+    <span className="inline-flex items-center gap-1.5" title={`${PM_CONF_LABEL[c]}: ${PM_CONF_HINT[c]}`}>
+      <span className="inline-flex gap-[3px]">{[1, 2, 3].map(i => <span key={i} className="rounded-full" style={{ width: small ? 6 : 7, height: small ? 6 : 7, background: i <= n ? color : 'transparent', border: `1px solid ${i <= n ? color : 'var(--border)'}` }} />)}</span>
+      <span className={(small ? 'text-[11px]' : 'text-xs') + ' font-medium'} style={{ color }}>{PM_CONF_LABEL[c]}</span>
+    </span>
+  );
+}
+
+// What the read was built from: the sessions every pass read, their date range, and how many weeks that spans.
+function pmReadInfo(pm) {
+  const ids = [...new Set(pm.runs.flatMap(r => r.sessions_read || []))].filter(id => /^\d{4}-\d{2}-\d{2}/.test(id)).sort();
+  if (!ids.length) return null;
+  const first = ids[0].slice(0, 10), last = ids[ids.length - 1].slice(0, 10);
+  const weeks = Math.max(1, Math.round((new Date(last) - new Date(first)) / (7 * 864e5)));
+  const lastRun = pm.runs[pm.runs.length - 1]?.created_at;
+  return { sessions: ids.length, first, last, weeks, lastRun };
+}
+const pmDay = (d) => new Date(d + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+
+// The quote that best carries a finding: the client's own words, said in the room if possible, shortest first.
+function pmBestQuote(pm, f) {
+  const ev = pm.evidenceFor(f.id).filter(e => !e.is_counter && e.speaker === 'client');
+  const rank = { direct: 0, self_report: 1, inference: 2 };
+  return ev.sort((a, b) => (rank[a.class] ?? 3) - (rank[b.class] ?? 3) || a.quote.length - b.quote.length)[0] || null;
+}
+
+function PmLegend() {
+  return (
+    <div className="surface rounded-2xl p-5">
+      <p className="text-[10px] tracking-[0.2em] uppercase text-faint mb-3">How to read the labels</p>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {['solid', 'live', 'thin'].map(c => <div key={c}><PmSure c={c} /><p className="text-faint text-xs mt-1">{PM_CONF_HINT[c][0].toUpperCase() + PM_CONF_HINT[c].slice(1)}.</p></div>)}
+        <div><span className="text-xs font-medium text-dim">Nothing yet</span><p className="text-faint text-xs mt-1">Not seen often enough to show. We don't fill an area just to have something there.</p></div>
+      </div>
     </div>
   );
 }
@@ -4200,96 +4245,173 @@ function PmOverview({ data, pm, onNav, isCoach }) {
   const idx = pages.findIndex(p => p.key === openKey);
   const page = idx >= 0 ? pages[idx] : null;
   const label = (p) => (p.f || p.g) ? `${p.col.title} · ${p.sec.title}${p.of > 1 ? ` (${p.n} of ${p.of})` : ''}` : `${p.col.title} · ${p.sec.title}`;
-  const sessionsSeen = new Set(pm.evidence.filter(e => visible.some(f => f.id === e.finding_id)).map(e => e.session_id)).size;
   const name = data.profile?.preferredName || (data.profile?.name || '').split(' ')[0];
+  const read = pmReadInfo(pm);
+  const by = (c) => visible.filter(f => f.confidence === c).length;
+  const suggestions = growth.nudges.length + growth.interventions.length;
+  const forecasts = growth.prediction.filter(p => p.status === 'scored').length;
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
+  const top = [...visible].sort(pmSort).slice(0, 3);
+  const keyOf = (f) => `${pmPlace(f)}/${f.id}`;
 
   const stats = [
-    [visible.length, 'Findings'],
-    [sessionsSeen, 'Sessions drawn on'],
-    [visible.filter(f => f.confidence === 'thin').length, 'Questions for you'],
-    [visible.filter(f => f.status === 'disputed').length, 'Under review'],
+    ...(read ? [[read.weeks, 'Weeks'], [read.sessions, 'Sessions']] : []),
+    [by('solid'), 'Established'],
+    [by('live'), 'Emerging possibilities'],
+    [by('thin'), 'Questions for you'],
+    [suggestions, 'Suggestions'],
+    [forecasts, 'Forecasts checked'],
   ];
-  if (!clientView) stats.push([candidates.length + proposalCount, 'Waiting for review']);
 
   return (
-    <div className="fade-in">
-      <PmHeader eyebrow={clientView ? 'YOUR MODEL' : 'PERSON MODEL'} title={clientView ? 'Your read' : `${name}'s model`}
-        sub={clientView ? 'What we have learned together so far. Open any card to read it.' : 'Confirmed findings, laid out as the client sees them. Open any card to read it.'}
-        clientView={clientView} setClientView={setClientView} isCoach={isCoach} />
-
-      <div className={'grid gap-3 mb-6 ' + (stats.length === 5 ? 'grid-cols-2 md:grid-cols-5' : 'grid-cols-2 md:grid-cols-4')}>
-        {stats.map(([v, l], i) => (
-          <div key={l} className={'surface rounded-xl px-4 py-3' + (l === 'Waiting for review' && v > 0 ? ' cursor-pointer' : '')}
-            onClick={l === 'Waiting for review' && v > 0 ? () => onNav('/model/review') : undefined}>
-            <div className="text-3xl font-light" style={{ color: l === 'Waiting for review' && v > 0 ? 'var(--secondary)' : 'var(--text)' }}>{v}</div>
-            <div className="text-[10px] tracking-[0.18em] text-faint mt-1 uppercase">{l}</div>
+    <div className="fade-in space-y-10">
+      {/* Hero, as on the Overview */}
+      <div>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="min-w-0">
+            <p className="text-faint text-xs tracking-[0.2em] mb-2">{clientView ? 'YOUR READ' : 'PERSON MODEL'}</p>
+            <h1 className="text-3xl md:text-4xl font-bold mb-3">{clientView ? 'Your read' : `${name}'s read`}</h1>
+            <p className="text-secondary italic reading" style={{ fontSize: '17px' }}>
+              {read ? `Built from ${plural(read.sessions, 'session')}, ${pmDay(read.first)} to ${pmDay(read.last)}.` : 'Built from your sessions.'}
+              {' '}{clientView ? 'What we have learned together so far.' : `Confirmed findings, laid out as ${name} sees them.`}
+            </p>
           </div>
-        ))}
+          {isCoach && (
+            <button onClick={() => setClientView(!clientView)}
+              className={'px-3 py-1.5 rounded-lg text-sm inline-flex items-center gap-2 shrink-0 ' + (clientView ? 'btn-primary' : 'surface hover:bg-primary-soft')}>
+              <Icon name={clientView ? 'users' : 'lock'} size={15} /> {clientView ? 'Showing as client' : 'Show as client'}
+            </button>
+          )}
+        </div>
+        {clientView && <p className="text-xs text-faint mt-3">Client view: confirmed findings only. Coach-only details are hidden. Clients cannot open this page themselves.</p>}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        {PM_COLUMNS.map(col => {
-          const secs = col.id === 'growth' ? PM_GROWTH_SECTIONS : PM_SECTIONS[col.id];
-          const colItems = col.id === 'growth' ? [] : visible.filter(f => pmPlace(f).startsWith(col.id + '/'));
-          const qs = colItems.filter(f => f.confidence === 'thin').length;
-          const gCount = growth.prediction.length + growth.nudges.length + growth.interventions.length;
-          return (
-            <div key={col.id} className="surface rounded-2xl p-4 flex flex-col gap-3">
-              <div className="flex items-center gap-3 px-1 pt-1">
-                <span className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ border: `1px solid ${col.color}55`, color: col.color, background: col.color + '14' }}><Icon name={col.icon} size={18} /></span>
-                <div className="min-w-0">
-                  <h2 className="text-lg font-semibold leading-tight">{col.title}</h2>
-                  <p className="text-faint text-xs">{col.line}</p>
+      {!clientView && candidates.length + proposalCount > 0 && (
+        <div className="grid"><CTACard icon="clipboard" title={`${candidates.length + proposalCount} waiting for your review`}
+          body={`${plural(candidates.length, 'finding')} and ${plural(proposalCount, 'growth proposal')}. Nothing reaches ${name} until you confirm it.`}
+          cta="Review now →" onClick={() => onNav('/model/review')} /></div>
+      )}
+
+      {/* About this read */}
+      <div>
+        <p className="text-[10px] tracking-[0.2em] uppercase text-faint mb-3">About this read</p>
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
+          {stats.map(([v, l], i) => (
+            <div key={l} className="surface rounded-xl px-3 py-4 text-center">
+              <div className="text-3xl font-bold" style={{ color: i < 2 && read ? 'var(--primary)' : v > 0 ? 'var(--text)' : 'var(--text-faint)' }}>{v}</div>
+              <div className="text-[10px] tracking-[0.14em] text-faint mt-1 uppercase leading-tight">{l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* What stands out */}
+      {top.length > 0 && (
+        <div>
+          <SectionHeading sub="The most important things we have found so far, most important first.">What stands out</SectionHeading>
+          <div className="space-y-3">
+            {top.map((f, i) => {
+              const col = PM_COLUMNS.find(c => pmPlace(f).startsWith(c.id + '/'));
+              const q = pmBestQuote(pm, f);
+              return (
+                <button key={f.id} onClick={() => setOpenKey(keyOf(f))} className="surface rounded-xl p-5 flex gap-4 items-start w-full text-left hover:opacity-95 transition" style={{ borderLeft: `3px solid ${col.color}` }}>
+                  <span className="w-8 h-8 rounded-full flex items-center justify-center font-bold flex-shrink-0 text-white" style={{ background: 'var(--primary)' }}>{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3 flex-wrap mb-1">
+                      <span className="text-[10px] tracking-[0.18em] uppercase" style={{ color: col.color }}>{col.title}</span>
+                      <PmSure c={f.confidence} small />
+                      {!clientView && <span className="text-faint text-[10px] font-mono">{f.code}</span>}
+                    </div>
+                    <h3 className={'text-lg font-semibold leading-snug ' + (f.confidence === 'thin' ? 'italic' : '')}>{pmHeadline(f)}</h3>
+                    {q && <p className="italic reading border-l-2 pl-4 mt-3 text-dim" style={{ borderColor: 'var(--secondary)', fontSize: '15px' }}>"{q.quote}"</p>}
+                  </div>
+                  <span className="text-faint pt-1">→</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* The three parts */}
+      <div>
+        <SectionHeading sub="Everything in one place. Open any card to read it.">Your read, in three parts</SectionHeading>
+        <div className="grid gap-4 lg:grid-cols-3 items-start">
+          {PM_COLUMNS.map(col => {
+            const isG = col.id === 'growth';
+            const secs = isG ? PM_GROWTH_SECTIONS : PM_SECTIONS[col.id];
+            const itemsOf = (sec) => isG ? (sec.id === 'evolution' ? growth.evolution : growth[sec.id]) : visible.filter(pmIn(col, sec)).sort(pmSort);
+            const waitingOf = (sec) => clientView ? 0 : isG ? (proposals[sec.id] || 0) : candidates.filter(pmIn(col, sec)).length;
+            const filled = secs.filter(sec => itemsOf(sec).length);
+            const empty = secs.filter(sec => !itemsOf(sec).length);
+            const colF = isG ? [] : visible.filter(f => pmPlace(f).startsWith(col.id + '/'));
+            const summary = isG
+              ? [suggestions && plural(suggestions, 'suggestion'), growth.prediction.length && plural(growth.prediction.length, 'forecast'), forecasts && `${forecasts} checked`, growth.evolution.length && plural(growth.evolution.length, 'change')].filter(Boolean)
+              : [colF.filter(f => f.confidence === 'solid').length && `${colF.filter(f => f.confidence === 'solid').length} established`,
+                 colF.filter(f => f.confidence === 'live').length && plural(colF.filter(f => f.confidence === 'live').length, 'emerging possibility', 'emerging possibilities'),
+                 colF.filter(f => f.confidence === 'thin').length && plural(colF.filter(f => f.confidence === 'thin').length, 'question')].filter(Boolean);
+            return (
+              <div key={col.id} className="surface rounded-2xl overflow-hidden flex flex-col" style={{ borderTop: `3px solid ${col.color}` }}>
+                <div className="px-5 pt-5 pb-4" style={{ background: col.color + '12', borderBottom: '1px solid var(--border)' }}>
+                  <div className="flex items-center gap-3">
+                    <span className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ border: `1px solid ${col.color}66`, color: col.color, background: col.color + '1f' }}><Icon name={col.icon} size={18} /></span>
+                    <div className="min-w-0">
+                      <h2 className="text-lg font-bold leading-tight">{col.title}</h2>
+                      <p className="text-faint text-xs">{col.line}</p>
+                    </div>
+                  </div>
+                  <p className="text-[11px] font-semibold mt-3" style={{ color: col.color }}>{summary.length ? summary.join(' · ') : 'Nothing shown yet'}</p>
+                </div>
+                <div className="p-4 flex flex-col gap-3">
+                  {filled.map(sec => isG
+                    ? <PmGrowthCard key={sec.id} sec={sec} col={col} items={itemsOf(sec)} waiting={waitingOf(sec)} clientView={clientView} open={(k) => setOpenKey(k)} onNav={onNav} />
+                    : (
+                      <div key={sec.id} className="rounded-xl p-3.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${col.color}` }}>
+                        <p className="text-[10px] tracking-[0.18em] uppercase font-semibold mb-2" style={{ color: col.color }}>{sec.title}</p>
+                        <div className="space-y-2">
+                          {itemsOf(sec).map(f => (
+                            <button key={f.id} onClick={() => setOpenKey(`${col.id}/${sec.id}/${f.id}`)} className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-primary-soft transition" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                              <p className={'text-sm leading-snug ' + (f.confidence === 'thin' ? 'italic' : '')}>{pmHeadline(f)}</p>
+                              <div className="flex gap-2 mt-2 flex-wrap items-center">
+                                <PmSure c={f.confidence} small />
+                                {f.status === 'disputed' && <PmChip color="#f87171">Under review</PmChip>}
+                                {!clientView && <span className="text-faint text-[10px] font-mono ml-auto">{f.code}</span>}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        {waitingOf(sec) > 0 && <PmReviewLink n={waitingOf(sec)} to={`/model/review/${col.id}/${sec.id}`} onNav={onNav} />}
+                      </div>
+                    ))}
+                  {empty.length > 0 && (
+                    <div className="rounded-xl px-3.5 py-3" style={{ border: '1px dashed var(--border)' }}>
+                      <p className="text-[10px] tracking-[0.18em] uppercase text-faint mb-2">Nothing yet</p>
+                      <div className="flex flex-col gap-1.5">
+                        {empty.map(sec => (
+                          <div key={sec.id} className="flex items-center justify-between gap-2">
+                            <button onClick={() => setOpenKey(sec.id === 'evolution' ? 'growth/evolution' : `${col.id}/${sec.id}`)} className="text-sm text-dim hover:text-[var(--text)] text-left">{sec.title}</button>
+                            {waitingOf(sec) > 0 && <PmReviewLink n={waitingOf(sec)} to={`/model/review/${col.id}/${sec.id}`} onNav={onNav} chip />}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-              <p className="text-[10px] tracking-[0.18em] uppercase px-1 pb-2" style={{ color: col.color, borderBottom: '1px solid var(--border)' }}>
-                {col.id === 'growth'
-                  ? (gCount ? `${gCount} item${gCount === 1 ? '' : 's'}${growth.evolution.length ? ` · ${growth.evolution.length} change${growth.evolution.length === 1 ? '' : 's'}` : ''}` : growth.evolution.length ? `${growth.evolution.length} change${growth.evolution.length === 1 ? '' : 's'}` : 'Not started yet')
-                  : `${colItems.length} finding${colItems.length === 1 ? '' : 's'}${qs ? ` · ${qs} question${qs === 1 ? '' : 's'}` : ''}`}
-              </p>
-              {secs.map(sec => {
-                if (col.id === 'growth') return (
-                  <PmGrowthCard key={sec.id} sec={sec} col={col} items={sec.id === 'evolution' ? growth.evolution : growth[sec.id]} waiting={clientView ? 0 : proposals[sec.id]}
-                    clientView={clientView} open={(k) => setOpenKey(k)} onNav={onNav} />
-                );
-                const items = visible.filter(pmIn(col, sec)).sort(pmSort);
-                const waiting = candidates.filter(pmIn(col, sec)).length;
-                if (!items.length) return (
-                  <button key={sec.id} onClick={() => setOpenKey(`${col.id}/${sec.id}`)} className="text-left rounded-xl p-3.5 hover:bg-primary-soft transition" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: '3px solid var(--border)' }}>
-                    <p className="font-semibold text-sm">{sec.title}</p>
-                    <p className="text-faint text-xs mt-1 leading-relaxed">{sec.line}</p>
-                    <div className="flex gap-2 mt-2 flex-wrap">
-                      <PmChip>{col.id === 'growth' ? 'Not yet' : 'Nothing yet'}</PmChip>
-                      {!clientView && waiting > 0 && <PmReviewLink n={waiting} to={`/model/review/${col.id}/${sec.id}`} onNav={onNav} chip />}
-                    </div>
-                  </button>
-                );
-                return (
-                  <div key={sec.id} className="rounded-xl p-3.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderLeft: `3px solid ${col.color}` }}>
-                    <p className="font-semibold text-sm mb-2">{sec.title}</p>
-                    <div className="space-y-1.5">
-                      {items.map(f => (
-                        <button key={f.id} onClick={() => setOpenKey(`${col.id}/${sec.id}/${f.id}`)} className="w-full text-left rounded-lg px-2.5 py-2 hover:bg-primary-soft transition" style={{ border: '1px solid var(--border)' }}>
-                          <p className={'text-sm leading-snug ' + (f.confidence === 'thin' ? 'italic text-dim' : '')}>{pmHeadline(f)}</p>
-                          <div className="flex gap-1.5 mt-1.5 flex-wrap items-center">
-                            {f.confidence === 'thin' && <PmChip color="#fbbf24">Question</PmChip>}
-                            {f.status === 'disputed' && <PmChip color="#f87171">Under review</PmChip>}
-                            {!clientView && <><span className="text-faint text-[10px] font-mono">{f.code}</span><PmChip color={PM_CONF_COLOR[f.confidence]}>{f.confidence}</PmChip></>}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                    {!clientView && waiting > 0 && <PmReviewLink n={waiting} to={`/model/review/${col.id}/${sec.id}`} onNav={onNav} />}
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
+      <PmLegend />
+
+      <p className="text-faint text-xs text-center reading">
+        {read ? `Built from ${clientView ? 'your' : `${name}'s`} sessions of ${pmDay(read.first)} to ${pmDay(read.last)}.` : ''}
+        {!clientView && read?.lastRun ? ` Last pass ${pmDate(read.lastRun)}.` : ''} Private: only {clientView ? 'you and your coach' : `${name} and you`} can see it.
+      </p>
+
       {page && (
-        <PmReader crumbs={[clientView ? 'Your read' : `${name}'s model`, page.col.title, page.sec.title]}
+        <PmReader accent={page.col.color} crumbs={[clientView ? 'Your read' : `${name}'s read`, page.col.title, page.sec.title]}
           onClose={() => setOpenKey(null)}
           prev={idx > 0 ? { label: label(pages[idx - 1]), go: () => setOpenKey(pages[idx - 1].key) } : null}
           next={idx < pages.length - 1 ? { label: label(pages[idx + 1]), go: () => setOpenKey(pages[idx + 1].key) } : null}
