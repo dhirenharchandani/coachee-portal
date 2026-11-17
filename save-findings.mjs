@@ -19,7 +19,7 @@
 //       "evidence": [ { "session_id", "quote", "class": "direct|self_report|inference", "is_counter"?, "episode"?, "note"? } ]
 //   } ],
 //   "updates": [ {                        // run card: new sessions update existing findings before creating new ones
-//       "code": "F-007",                  // existing finding; only findings still at status 'candidate' are changed
+//       "code": "F-007",                  // existing finding; 'candidate' ones are changed; confirmed / disputed ones only with --coach-approved
 //       "reason": "...",                  // required; logged against every changed field in pm_finding_history
 //       "set": { "episodes"?, "confidence"?, "counter_evidence"?, "scope"?, "exceptions"?, "statement"?, "mechanism"?,
 //                "alternative"?, "client_headline"?, "client_question"?, "importance"?, "pattern_sequence"?, "domains"? },
@@ -36,6 +36,9 @@ const LOOP_STEPS = ['trigger', 'interpretation', 'response', 'feedback', 'conseq
 
 const [file, ...flags] = process.argv.slice(2);
 const DRY = flags.includes('--dry');
+// Confirmed findings belong to the coach. They can only be updated when the coach approved the change in
+// advance (they saw the proposal), signalled by this flag; the reason is logged as approved by the coach.
+const COACH_APPROVED = flags.includes('--coach-approved');
 if (!PAT) { console.error('SUPABASE_ACCESS_TOKEN env var is required.'); process.exit(1); }
 if (!file) { console.error('Usage: node save-findings.mjs <payload.json> [--dry]'); process.exit(1); }
 
@@ -151,7 +154,7 @@ function gate(f, transcripts, clientNames) {
     const reasons = [];
     const row = existing.get(u.code);
     if (!row) reasons.push(`no finding ${u.code}`);
-    else if (row.status !== 'candidate') reasons.push(`${u.code} is ${row.status}; the coach owns it now`);
+    else if (row.status !== 'candidate' && !(COACH_APPROVED && ['confirmed', 'disputed'].includes(row.status))) reasons.push(`${u.code} is ${row.status}; the coach owns it now (needs --coach-approved)`);
     if (!u.reason || !u.reason.trim()) reasons.push('missing reason');
     const bad = Object.keys(u.set || {}).filter(k => !UPDATABLE.includes(k));
     if (bad.length) reasons.push(`fields not updatable here: ${bad.join(', ')}`);
@@ -227,9 +230,9 @@ function gate(f, transcripts, clientNames) {
       if (k === 'domains') return `domains = ARRAY(SELECT jsonb_array_elements_text(x->'set'->'domains'))`;
       return `${k} = x->'set'->>'${k}'`;
     });
-    const reason = `${u.reason} (Claude, ${p.run?.kind || 'manual'})`;
+    const reason = row.status === 'candidate' ? `${u.reason} (Claude, ${p.run?.kind || 'manual'})` : `${u.reason} (approved by the coach; Claude, ${p.run?.kind || 'manual'})`;
     await sql(`UPDATE public.pm_findings f SET ${[...cols, `last_change_reason = x->>'reason'`].join(', ')}
-      FROM (SELECT ${J({ set, reason })} AS x) s WHERE f.id = '${row.id}' AND f.status = 'candidate'`);
+      FROM (SELECT ${J({ set, reason })} AS x) s WHERE f.id = '${row.id}' AND (f.status = 'candidate' OR (${COACH_APPROVED} AND f.status IN ('confirmed','disputed')))`);
     for (const e of evidence) await insertEvidence(row.id, e);
     results.updated.push({ code: u.code, fields: Object.keys(set), quotes_added: evidence.length });
   }

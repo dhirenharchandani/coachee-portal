@@ -3575,8 +3575,10 @@ function usePmClientView() {
 
 function pmSessionLabel(data, sessionId) {
   const s = (data.sessions || []).find(x => x.id === sessionId);
-  if (!s) return sessionId;
-  const d = new Date(s.date + 'T12:00:00');
+  // Sessions from before the dashboard (older transcripts) carry their date in the id.
+  const date = s ? s.date : (/^\d{4}-\d{2}-\d{2}/.test(sessionId || '') ? sessionId.slice(0, 10) : null);
+  if (!date) return sessionId;
+  const d = new Date(date + 'T12:00:00');
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 function pmDate(ts) { return new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); }
