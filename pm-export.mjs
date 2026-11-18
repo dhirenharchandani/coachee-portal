@@ -3,6 +3,9 @@
 //   <out>/sessions.json                 session list from the dashboard row (id, date, title, hasTranscript)
 //   <out>/findings.json                 existing findings for the target coachee, ALL statuses
 //                                       (rejected ones too, so the same reading is not proposed again)
+//   <out>/client-responses.json         the client's own responses on the dashboard, per finding, with
+//                                       which ones the coach has not yet acted on ("open": true). Answers to
+//                                       Questions (yes / sometimes / no) and disputes are handled first in a pass.
 //
 // Usage: SUPABASE_ACCESS_TOKEN=<pat> node pm-export.mjs <sourceFolder> <targetFolder> <outDir>
 // e.g.   node pm-export.mjs olivia olivia-lab ~/tmp/pm-olivia
@@ -44,9 +47,24 @@ transcripts.forEach((t, i) => writeFileSync(join(out, 'transcripts', `${String(i
 writeFileSync(join(out, 'sessions.json'), JSON.stringify(sessions, null, 2));
 writeFileSync(join(out, 'findings.json'), JSON.stringify(findings, null, 2));
 
+// A response is open until the coach acts after it: a coach "noted" entry, or any logged change to the finding.
+const history = await sql(`
+  SELECT h.finding_id, h.field, h.changed_at FROM public.pm_finding_history h
+  JOIN public.pm_findings f ON f.id = h.finding_id WHERE f.coachee_id = ${lit(row.id)} AND h.field <> 'client_response'`);
+const responses = findings.filter(f => (f.client_responses || []).some(r => r.by === 'client')).map(f => {
+  const all = f.client_responses || [];
+  const last = [...all].reverse().find(r => r.by === 'client');
+  const acted = all.some(r => r.by === 'coach' && r.at > last.at)
+    || history.some(h => h.finding_id === f.id && new Date(h.changed_at) > new Date(last.at));
+  return { code: f.code, status: f.status, confidence: f.confidence, headline: f.client_headline, question: f.client_question,
+    responses: all, open: !acted };
+});
+writeFileSync(join(out, 'client-responses.json'), JSON.stringify(responses, null, 2));
+
 console.log(JSON.stringify({
   transcripts: transcripts.map(t => `${t.session_id} (${t.source}, ${t.word_count} words)`),
   sessionsWithoutTranscript: sessions.filter(s => !s.hasTranscript).map(s => `${s.date} ${s.title}`),
   existingFindings: findings.reduce((m, f) => ({ ...m, [f.status]: (m[f.status] || 0) + 1 }), {}),
+  openClientResponses: responses.filter(r => r.open).map(r => `${r.code}: ${[...r.responses].reverse().find(x => x.by === 'client').kind}`),
   out,
 }, null, 2));

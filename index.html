@@ -4594,10 +4594,11 @@ function useClientRead(enabled) {
   const consent = () => call('pm_client_consent', { version: PM_CONSENT_VERSION }, (c) => { c.st.consent_at = new Date().toISOString(); });
   const requestDelete = () => call('pm_client_request_delete', {}, (c) => { c.st.delete_requested_at = c.st.delete_requested_at || new Date().toISOString(); });
   const respond = (finding, kind, note) => call('pm_client_respond', { finding, kind, note: note || '' }, (c) => {
-    if (kind !== 'agree' && !String(note || '').trim()) throw new Error('Please say what does not fit');
+    const challenges = ['dispute', 'correct'].includes(kind);
+    if (challenges && !String(note || '').trim()) throw new Error('Please say what does not fit');
     const f = c.m.findings.find(x => x.id === finding);
     f.client_responses = [...(f.client_responses || []), { kind, text: note || '', at: new Date().toISOString(), by: 'client' }];
-    if (kind !== 'agree') f.status = 'disputed';
+    if (challenges) f.status = 'disputed';
   });
 
   // Shape it like usePersonModel so the same page and reader render it.
@@ -4655,8 +4656,48 @@ function PmConsent({ name, cr }) {
 }
 
 // The client's response to one finding: agree, say it doesn't fit, or correct a fact.
-const PM_RESPONSE_WORDS = { agree: 'You said this fits', dispute: 'You said this doesn\'t fit', correct: 'You corrected a fact' };
+const PM_RESPONSE_WORDS = { agree: 'You said this fits', dispute: 'You said this doesn\'t fit', correct: 'You corrected a fact',
+  yes: 'You answered: yes, that\'s me', sometimes: 'You answered: sometimes', no: 'You answered: not really', noted: 'Dhiren read the answer' };
+// Answers to a Question (a Thin finding). They are filed for the coach and don't put the finding under review.
+const PM_ANSWER_KINDS = ['yes', 'sometimes', 'no'];
+const PM_ANSWER_LABELS = { yes: 'Yes, that\'s me', sometimes: 'Sometimes', no: 'Not really' };
 function PmRespond({ f, pm }) {
+  if (f.confidence === 'thin' && f.status !== 'disputed') return <PmAnswer f={f} pm={pm} />;
+  return <PmRespondButtons f={f} pm={pm} />;
+}
+function PmAnswer({ f, pm }) {
+  const [pick, setPick] = useState(null);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const send = async () => {
+    setBusy(true); setErr('');
+    const r = await pmAttempt(() => pm.respond(f.id, pick, note.trim()));
+    setBusy(false);
+    if (r.ok) { setPick(null); setNote(''); } else setErr(r.error);
+  };
+  const mine = f.my_response;
+  return (
+    <div>
+      {mine && !pick && <p className="text-xs text-faint mb-2">{PM_RESPONSE_WORDS[mine.kind]} on {pmDate(mine.at)}{mine.text ? `: "${mine.text}"` : '.'} You can answer again if it changes.</p>}
+      {!mine && !pick && <p className="text-sm text-dim mb-2">This one is a question. Only you can answer it.</p>}
+      {pick && (
+        <div className="mb-3 flex gap-2 flex-wrap">
+          <textarea autoFocus className="input flex-1" rows={2} style={{ minWidth: 220 }} value={note} onChange={e => setNote(e.target.value)}
+            placeholder={pick === 'no' ? 'What happens instead? (optional)' : 'When does it happen, or not? An example helps. (optional)'} />
+          <button disabled={busy} onClick={send} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Send to Dhiren</button>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 items-center">
+        {PM_ANSWER_KINDS.map(k => (
+          <button key={k} disabled={busy} onClick={() => setPick(pick === k ? null : k)} className={'px-3 py-1.5 rounded-lg text-sm ' + (pick === k ? 'btn-primary' : 'surface')}>{PM_ANSWER_LABELS[k]}</button>
+        ))}
+        <PmSaveState busy={busy} err={err} />
+      </div>
+    </div>
+  );
+}
+function PmRespondButtons({ f, pm }) {
   const [mode, setMode] = useState(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -4752,7 +4793,7 @@ function PmClientRead({ data, cr, onNav }) {
 }
 
 // disputed: the client said it doesn't fit or corrected a fact. Keep, reword, or retire (framework: Under review).
-function PmReviewActions({ f, pm, onDone, disputed }) {
+function PmReviewActions({ f, pm, onDone, disputed, answered }) {
   const [mode, setMode] = useState(null); // 'reword' | 'reject' | 'merge'
   const [draft, setDraft] = useState({ client_headline: f.client_headline, client_question: f.client_question || '', statement: f.statement, confidence: f.confidence, importance: f.importance });
   const [reason, setReason] = useState('');
@@ -4784,7 +4825,7 @@ function PmReviewActions({ f, pm, onDone, disputed }) {
             <label className="text-xs text-faint">Importance
               <select className="input mt-1" value={draft.importance} onChange={e => setDraft({ ...draft, importance: e.target.value })}>{['high', 'medium', 'low'].map(c => <option key={c} value={c}>{c}</option>)}</select>
             </label>
-            <button disabled={busy} onClick={() => run(() => pm.update(f.id, changed(), 'Reworded by coach'), false)} className="text-sm text-primary pb-2">Save wording, keep as candidate</button>
+            {!answered && <button disabled={busy} onClick={() => run(() => pm.update(f.id, changed(), 'Reworded by coach'), false)} className="text-sm text-primary pb-2">Save wording, keep as candidate</button>}
           </div>
         </div>
       )}
@@ -4807,13 +4848,17 @@ function PmReviewActions({ f, pm, onDone, disputed }) {
         </div>
       )}
       <div className="flex flex-wrap gap-2 items-center">
-        <button disabled={busy} onClick={() => run(() => pm.update(f.id, { ...changed(), status: 'confirmed' }, disputed ? (mode === 'reword' ? 'Reworded after the client\'s response' : 'Kept after the client\'s response') : mode === 'reword' ? 'Reworded and confirmed by coach' : 'Confirmed by coach'), true)}
-          className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold">{mode === 'reword' ? 'Save and confirm' : disputed ? 'Keep as is' : 'Confirm'}</button>
+        <button disabled={busy} onClick={() => run(() => answered
+            // Marks the answer as read, so it leaves the list even when nothing about the finding changes.
+            ? pm.update(f.id, { ...(mode === 'reword' ? changed() : {}), client_responses: [...(f.client_responses || []), { kind: 'noted', text: '', at: new Date().toISOString(), by: 'coach' }] },
+                mode === 'reword' ? 'Updated after the client\'s answer' : 'Read the client\'s answer; no change')
+            : pm.update(f.id, { ...changed(), status: 'confirmed' }, disputed ? (mode === 'reword' ? 'Reworded after the client\'s response' : 'Kept after the client\'s response') : mode === 'reword' ? 'Reworded and confirmed by coach' : 'Confirmed by coach'), true)}
+          className="btn-primary px-4 py-1.5 rounded-lg text-sm font-semibold">{mode === 'reword' ? (answered ? 'Save changes' : 'Save and confirm') : answered ? 'No change' : disputed ? 'Keep as is' : 'Confirm'}</button>
         <button disabled={busy} onClick={() => setMode(mode === 'reword' ? null : 'reword')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'reword' ? 'btn-primary' : 'surface')}>Reword</button>
         {!disputed && <button disabled={busy} onClick={() => setMode(mode === 'merge' ? null : 'merge')} className={'px-3 py-1.5 rounded-lg text-sm ' + (mode === 'merge' ? 'btn-primary' : 'surface')}>Merge</button>}
         <button disabled={busy} onClick={() => setMode(mode === 'reject' ? null : 'reject')} className="surface px-3 py-1.5 rounded-lg text-sm" style={{ color: '#f87171' }}>{disputed ? 'Retire' : 'Reject'}</button>
         <PmSaveState busy={busy} err={err} />
-        <span className="text-faint text-xs ml-auto hidden md:inline">{disputed ? 'Keeping or rewording clears "under review" for the client' : 'Confirming shows it to the client'}</span>
+        <span className="text-faint text-xs ml-auto hidden md:inline">{answered ? 'Raise the confidence under Reword once the transcripts back it up' : disputed ? 'Keeping or rewording clears "under review" for the client' : 'Confirming shows it to the client'}</span>
       </div>
     </div>
   );
@@ -4846,6 +4891,7 @@ function PmReviewView({ data, pm, isCoach, onNav, section }) {
   const [showClosed, setShowClosed] = useState(false);
   const [openG, setOpenG] = useState(null);
   const [openD, setOpenD] = useState(null);
+  const [openA, setOpenA] = useState(null);
   const order = useRef([]);
   const only = pmSectionOf(section);
   const autoOpened = useRef(false);
@@ -4870,6 +4916,16 @@ function PmReviewView({ data, pm, isCoach, onNav, section }) {
   const di = disputedList.findIndex(f => f.id === openD);
   const dOpen = di >= 0 ? disputedList[di] : null;
   const lastWord = (f) => [...(f.client_responses || [])].reverse().find(r => r.by === 'client');
+  // Answered Questions wait here until the coach acts on the answer: a change to the finding after it, or "No change".
+  const answeredList = only ? [] : pm.findings.filter(f => {
+    const w = lastWord(f);
+    if (f.status !== 'confirmed' || !w || !PM_ANSWER_KINDS.includes(w.kind)) return false;
+    const coachSince = (f.client_responses || []).some(r => r.by === 'coach' && r.at > w.at)
+      || pm.historyFor(f.id).some(h => h.field !== 'client_response' && h.changed_at > w.at);
+    return !coachSince;
+  }).sort(pmSort);
+  const ai = answeredList.findIndex(f => f.id === openA);
+  const aOpen = ai >= 0 ? answeredList[ai] : null;
   const confirmed = pm.findings.filter(f => f.status === 'confirmed').length;
   const open = pm.findings.find(f => f.id === openId);
   const qi = queue.findIndex(f => f.id === openId);
@@ -4998,6 +5054,37 @@ function PmReviewView({ data, pm, isCoach, onNav, section }) {
             })}
           </div>
         </div>
+      )}
+
+      {answeredList.length > 0 && (
+        <div className="mt-8">
+          <PmEyebrow color="#fbbf24">Answered questions · {answeredList.length}</PmEyebrow>
+          <p className="text-faint text-xs mb-3">Questions the client answered. An answer is their own account, not a new occasion: use it to raise, narrow, reword or retire the finding, alongside what the transcripts show. Nothing changes for the client until you act.</p>
+          <div className="surface rounded-2xl p-2">
+            {answeredList.map((f, i) => {
+              const w = lastWord(f);
+              return (
+                <button key={f.id} onClick={() => setOpenA(f.id)} className="w-full text-left rounded-xl px-4 py-3 hover:bg-primary-soft transition flex gap-4 items-start" style={i ? { borderTop: '1px solid var(--border)' } : {}}>
+                  <span className="text-faint text-xs font-mono pt-1 shrink-0 w-12">{f.code}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="leading-snug">{pmHeadline(f)}</p>
+                    <p className="text-sm mt-1 italic" style={{ color: '#fbbf24' }}>{PM_RESPONSE_WORDS[w.kind].replace('You', 'Client')}{w.text ? `: "${w.text}"` : ''} <span className="text-faint not-italic text-xs">· {pmDate(w.at)}</span></p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {aOpen && (
+        <PmReader crumbs={['Review Queue', 'Answered questions', aOpen.code]} onClose={() => setOpenA(null)}
+          prev={ai > 0 ? { label: answeredList[ai - 1].code, go: () => setOpenA(answeredList[ai - 1].id) } : null}
+          next={ai < answeredList.length - 1 ? { label: answeredList[ai + 1].code, go: () => setOpenA(answeredList[ai + 1].id) } : null}
+          footer={<PmReviewActions key={aOpen.id} f={aOpen} pm={pm} disputed answered onDone={() => setOpenA(answeredList[ai + 1]?.id || null)} />}>
+          <PmFindingTitle f={aOpen} clientView={false} eyebrow="The client answered this question" color="#fbbf24" />
+          <PmFindingBody f={aOpen} pm={pm} data={data} clientView={false} />
+        </PmReader>
       )}
 
       {dOpen && (
