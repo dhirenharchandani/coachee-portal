@@ -3661,7 +3661,7 @@ function PmHistory({ items, clientView, findings }) {
           <span className="text-faint text-xs shrink-0 pt-0.5" style={{ minWidth: 86 }}>{pmDate(h.changed_at)}</span>
           <span className="text-dim">
             {h.field === 'created' ? 'First proposed'
-              : clientView && PM_HISTORY_TEXT_FIELDS[h.field] ? <><strong className="text-[var(--text)]">{PM_HISTORY_TEXT_FIELDS[h.field]}</strong>: wording updated</>
+              : clientView && PM_HISTORY_TEXT_FIELDS[h.field] ? <><strong className="text-[var(--text)]">{PM_HISTORY_TEXT_FIELDS[h.field]}</strong>: reworded to fit the evidence</>
               : <><strong className="text-[var(--text)]">{h.field.replace(/_/g, ' ')}</strong>: {fmt(h.before)} → {fmt(h.after)}</>}
             {h.reason && !clientView && <span className="text-faint"> · {h.reason}</span>}
             {!clientView && <span className="text-faint"> · {h.actor}</span>}
