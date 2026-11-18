@@ -4485,10 +4485,131 @@ function PmClientAccess({ pm, name }) {
   );
 }
 
+// ── Map: the read as a picture. Cards are boxes, links are lines. Columns run left to right along "may drive"
+// links: strengths to draw on, then what's furthest upstream, then where it shows up. Cards that only "go with"
+// another sit in that card's column. Click a box to open the card.
+const PM_MAP_EDGE = {
+  feeds: { color: 'var(--text-dim)', dash: '', arrow: true, label: 'may drive' },
+  draws_on: { color: '#34d399', dash: '6 4', arrow: true, label: 'a strength for' },
+  goes_with: { color: 'var(--text-faint)', dash: '2 4', arrow: false, label: 'goes with' },
+  pulls_against: { color: '#f87171', dash: '8 3 2 3', arrow: false, label: 'pulls against' },
+};
+function pmMapLayout(findings, links) {
+  const ids = new Set(findings.map(f => f.id));
+  const L = links.filter(l => ids.has(l.from_id) && ids.has(l.to_id));
+  const col = new Map();
+  // Longest "may drive" chain above each card.
+  const feeds = L.filter(l => l.kind === 'feeds');
+  const inFeeds = new Set(feeds.flatMap(l => [l.from_id, l.to_id]));
+  const depth = (id, seen = new Set()) => {
+    if (seen.has(id)) return 0; seen.add(id);
+    const ups = feeds.filter(l => l.to_id === id);
+    return ups.length ? 1 + Math.max(...ups.map(l => depth(l.from_id, new Set(seen)))) : 0;
+  };
+  for (const id of inFeeds) col.set(id, 1 + depth(id));
+  // Strengths that only help others sit at the far left.
+  for (const l of L.filter(l => l.kind === 'draws_on')) if (!col.has(l.from_id)) col.set(l.from_id, 0);
+  // Cards that go with (or pull against) a placed card join its column; repeat until nothing moves.
+  for (let k = 0; k < 6; k++) for (const l of L.filter(l => l.kind === 'goes_with' || l.kind === 'pulls_against' || l.kind === 'draws_on')) {
+    if (col.has(l.from_id) && !col.has(l.to_id)) col.set(l.to_id, Math.max(1, col.get(l.from_id)));
+    else if (col.has(l.to_id) && !col.has(l.from_id)) col.set(l.from_id, Math.max(1, col.get(l.to_id)));
+  }
+  const linked = new Set(L.flatMap(l => [l.from_id, l.to_id]));
+  for (const id of linked) if (!col.has(id)) col.set(id, 1);
+  const maxCol = Math.max(1, ...[...col.values()]);
+  const loose = findings.filter(f => !linked.has(f.id));
+  // Order within a column by where its neighbours sit, so lines cross less.
+  const cols = [];
+  for (let c = 0; c <= maxCol; c++) cols.push(findings.filter(f => col.get(f.id) === c).sort(pmSort));
+  const pos = new Map();
+  cols.forEach((list, c) => list.forEach((f, i) => pos.set(f.id, i)));
+  for (let pass = 0; pass < 3; pass++) cols.forEach((list, c) => {
+    const score = (f) => { const nb = L.filter(l => l.from_id === f.id || l.to_id === f.id).map(l => l.from_id === f.id ? l.to_id : l.from_id).filter(n => col.get(n) !== c);
+      return nb.length ? nb.reduce((s, n) => s + pos.get(n), 0) / nb.length : pos.get(f.id); };
+    list.sort((a, b) => score(a) - score(b)); list.forEach((f, i) => pos.set(f.id, i));
+  });
+  return { cols: cols.filter(c => c.length), L, loose };
+}
+
+function PmMap({ pm, findings, clientView, onOpen, growthCount }) {
+  const [hover, setHover] = useState(null);
+  const { cols, L, loose } = pmMapLayout(findings, pm.links || []);
+  const W = 200, H = 78, GX = 60, GY = 18, PAD = 16;
+  const at = new Map();
+  cols.forEach((list, c) => list.forEach((f, i) => at.set(f.id, { x: PAD + c * (W + GX), y: PAD + 26 + i * (H + GY) })));
+  const width = PAD * 2 + cols.length * W + (cols.length - 1) * GX;
+  const height = PAD * 2 + 26 + Math.max(...cols.map(c => c.length)) * (H + GY);
+  const strengthCol = cols[0].every(f => L.some(l => l.kind === 'draws_on' && l.from_id === f.id) && !L.some(l => l.kind === 'feeds' && (l.from_id === f.id || l.to_id === f.id)));
+  const colTitle = (list, c) => strengthCol && c === 0 ? 'Strengths to draw on' : c === (strengthCol ? 1 : 0) ? 'Where a chain starts' : c === (strengthCol ? 2 : 1) ? 'What it may lead to' : 'Further along';
+  const near = hover ? new Set([hover, ...L.filter(l => l.from_id === hover || l.to_id === hover).map(l => l.from_id === hover ? l.to_id : l.from_id)]) : null;
+  const placeOf = (f) => PM_COLUMNS.find(c => pmPlace(f).startsWith(c.id + '/')) || PM_COLUMNS[0];
+  const path = (l) => {
+    const a = at.get(l.from_id), b = at.get(l.to_id);
+    if (!a || !b) return null;
+    if (a.x === b.x) { const x = a.x + W, y1 = a.y + H / 2, y2 = b.y + H / 2, bend = 30 + Math.min(60, Math.abs(y2 - y1) / 4);
+      return { d: `M${x},${y1} C${x + bend},${y1} ${x + bend},${y2} ${x},${y2}`, end: [x, y2] }; }
+    const [s, t] = a.x < b.x ? [a, b] : [b, a];
+    const x1 = s.x + W, y1 = s.y + H / 2, x2 = t.x, y2 = t.y + H / 2, mx = (x1 + x2) / 2;
+    return { d: a.x < b.x ? `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` : `M${x2},${y2} C${mx},${y2} ${mx},${y1} ${x1},${y1}` };
+  };
+  if (!L.length) return <p className="text-faint text-sm">No links between cards yet. Once some are drawn, this map shows how the cards connect.</p>;
+  return (
+    <div>
+      <div className="flex gap-4 flex-wrap text-xs text-dim mb-3">
+        {Object.entries(PM_MAP_EDGE).filter(([k]) => L.some(l => l.kind === k)).map(([k, e]) => (
+          <span key={k} className="inline-flex items-center gap-1.5">
+            <svg width="34" height="10"><line x1="1" y1="5" x2={e.arrow ? 26 : 33} y2="5" stroke={e.color} strokeWidth="2" strokeDasharray={e.dash} />{e.arrow && <path d="M26,1 L33,5 L26,9 Z" fill={e.color} />}</svg>{e.label}
+          </span>
+        ))}
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block w-4 h-3 rounded-sm" style={{ border: '1.5px dashed var(--text-faint)' }} />a question for you</span>
+        <span className="text-faint">Cards that only go with another sit in its column. Click a card to open it; hover to see what it touches.</span>
+      </div>
+      <div className="surface rounded-2xl overflow-x-auto" style={{ border: '1px solid var(--border)' }}>
+        <svg width={width} height={height} style={{ display: 'block', minWidth: width }} role="img" aria-label="How the cards in this read connect">
+          <defs>
+            {Object.entries(PM_MAP_EDGE).filter(([, e]) => e.arrow).map(([k, e]) => (
+              <marker key={k} id={`pm-arrow-${k}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill={e.color} /></marker>
+            ))}
+          </defs>
+          {cols.map((list, c) => <text key={c} x={PAD + c * (W + GX)} y={PAD + 12} fill="var(--text-faint)" fontSize="10" letterSpacing="1.5">{colTitle(list, c).toUpperCase()}</text>)}
+          {L.map(l => { const p = path(l); if (!p) return null; const e = PM_MAP_EDGE[l.kind]; const on = !near || (near.has(l.from_id) && near.has(l.to_id) && (l.from_id === hover || l.to_id === hover));
+            return <path key={l.id} d={p.d} fill="none" stroke={e.color} strokeWidth={on && hover ? 2.5 : 1.5} strokeDasharray={e.dash} opacity={on ? 0.95 : 0.12}
+              markerEnd={e.arrow ? `url(#pm-arrow-${l.kind})` : undefined}><title>{l.why}</title></path>; })}
+          {cols.flatMap(list => list).map(f => { const p = at.get(f.id); const pc = placeOf(f); const dim = near && !near.has(f.id); const n = growthCount(f);
+            return (
+              <g key={f.id} transform={`translate(${p.x},${p.y})`} style={{ cursor: 'pointer', opacity: dim ? 0.25 : 1, transition: 'opacity .15s' }}
+                onClick={() => onOpen(f)} onMouseEnter={() => setHover(f.id)} onMouseLeave={() => setHover(null)}>
+                <rect width={W} height={H} rx="10" fill="var(--surface-2)" stroke={f.status === 'disputed' ? '#f87171' : 'var(--border)'} strokeDasharray={f.confidence === 'thin' ? '5 4' : ''} strokeWidth="1.2" />
+                <rect width="4" height={H - 16} x="0" y="8" rx="2" fill={pc.color} />
+                <foreignObject x="12" y="7" width={W - 22} height={H - 14}>
+                  <div xmlns="http://www.w3.org/1999/xhtml" style={{ fontSize: '12px', lineHeight: 1.3, color: 'var(--text)', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                    <span style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden', fontStyle: f.confidence === 'thin' ? 'italic' : 'normal' }}>{pmHeadline(f)}</span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-faint)' }}>{!clientView && <span style={{ fontFamily: 'monospace', marginRight: 6 }}>{f.code}</span>}{PM_CONF_LABEL[f.confidence]}{n > 0 && <span style={{ color: '#34d399' }}> · {n} to try</span>}</span>
+                  </div>
+                </foreignObject>
+                <title>{pmHeadline(f)}</title>
+              </g>
+            ); })}
+        </svg>
+      </div>
+      {loose.length > 0 && (
+        <div className="mt-4">
+          <p className="text-[10px] tracking-[0.18em] uppercase text-faint mb-2">Not linked to other cards yet</p>
+          <div className="flex flex-wrap gap-2">
+            {loose.sort(pmSort).map(f => <button key={f.id} onClick={() => onOpen(f)} className="text-left text-sm rounded-lg px-3 py-1.5 hover:bg-primary-soft transition" style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${placeOf(f).color}` }}>{!clientView && <span className="text-faint text-[10px] font-mono mr-1.5">{f.code}</span>}{pmHeadline(f)}</button>)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
   const [cvSaved, setClientView] = usePmClientView();
   const clientView = !!forceClient || cvSaved;
   const [openKey, setOpenKey] = useState(null);
+  const [layout, setLayout] = useState(() => { try { return localStorage.getItem('pm-read-layout') || 'cards'; } catch { return 'cards'; } });
+  const pickLayout = (v) => { setLayout(v); try { localStorage.setItem('pm-read-layout', v); } catch {} };
   if (pm.status === 'loading' || pm.status === 'idle') return <p className="text-faint text-sm">Loading…</p>;
   if (pm.status === 'error') return <p className="text-secondary text-sm">Couldn't load the model: {pm.error}</p>;
 
@@ -4597,8 +4718,18 @@ function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
 
       {/* The three parts */}
       <div>
-        <SectionHeading sub="Everything in one place. Open any card to read it.">Your read, in three parts</SectionHeading>
-        <div className="grid gap-4 lg:grid-cols-3 items-start">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <SectionHeading sub={layout === 'map' ? 'How the cards connect: what may drive what, and the strengths you can draw on.' : 'Everything in one place. Open any card to read it.'}>Your read, in three parts</SectionHeading>
+          <div className="inline-flex rounded-lg p-0.5 text-sm" style={{ border: '1px solid var(--border)' }} role="tablist">
+            {[['cards', 'Cards'], ['map', 'Map']].map(([v, t]) => (
+              <button key={v} role="tab" aria-selected={layout === v} onClick={() => pickLayout(v)} className={'px-3 py-1 rounded-md ' + (layout === v ? 'btn-primary' : 'text-dim')}>{t}</button>
+            ))}
+          </div>
+        </div>
+        {layout === 'map' && <PmMap pm={pm} findings={visible} clientView={clientView}
+          onOpen={(f) => setOpenKey(`${pmPlace(f)}/${f.id}`)}
+          growthCount={(f) => pm.interventions.filter(i => i.finding_id === f.id && (clientView ? ['active', 'done'] : ['active', 'done', 'proposed']).includes(i.status)).length} />}
+        <div className="grid gap-4 lg:grid-cols-3 items-start" style={{ display: layout === 'map' ? 'none' : undefined }}>
           {PM_COLUMNS.map(col => {
             const isG = col.id === 'growth';
             const secs = isG ? PM_GROWTH_SECTIONS : PM_SECTIONS[col.id];
