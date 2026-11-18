@@ -3787,15 +3787,49 @@ function PmGrowthTitle({ g, type, clientView, color, eyebrow }) {
   );
 }
 
-function PmBasedOn({ findings, clientView }) {
+function PmBasedOn({ findings, clientView, onOpenFinding }) {
   if (!findings.length) return null;
   return (
     <PmBlock title="Based on">
-      <ul className="space-y-1">
-        {findings.map(f => <li key={f.id}>{!clientView && <span className="text-faint text-xs font-mono mr-2">{f.code}</span>}{pmHeadline(f)}{!clientView && !pmLive(f) && <span className="text-faint"> ({f.status})</span>}</li>)}
-      </ul>
+      <div className="space-y-2">
+        {findings.map(f => <PmLinkButton key={f.id} onClick={onOpenFinding && (() => onOpenFinding(f))}
+          label={pmHeadline(f)} code={!clientView ? f.code : null} note={!clientView && !pmLive(f) ? f.status : null} />)}
+      </div>
     </PmBlock>
   );
+}
+
+// A short name for a Growth item: the first phrase of its opportunity ("Testing the belief directly").
+function pmItemTitle(i) {
+  const s = (i.opportunity || i.action || '').trim();
+  const first = s.split(/(?<=[a-z0-9'")])[.:;](?:\s|$)/i)[0].replace(/[.:;]\s*$/, '');
+  return first.length > 90 ? first.slice(0, 87).replace(/\s+\S*$/, '') + '…' : first;
+}
+
+// A card-like button that opens another card in the reader. With no onClick it shows the same way, unclickable.
+function PmLinkButton({ onClick, chip, label, code, note, sub, extra }) {
+  const Tag = onClick ? 'button' : 'div';
+  return (
+    <Tag onClick={onClick || undefined} className={'w-full text-left rounded-lg px-3 py-2.5 flex gap-3 items-start ' + (onClick ? 'hover:bg-primary-soft transition cursor-pointer' : '')}
+      style={{ background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
+      <div className="flex-1 min-w-0">
+        <div className="flex gap-2 items-center flex-wrap">
+          {chip}
+          <span className="text-sm text-[var(--text)] leading-snug">{label}</span>
+          {code && <span className="text-faint text-[10px] font-mono">{code}{note ? ` · ${note}` : ''}</span>}
+          {extra}
+        </div>
+        {sub && <p className="text-faint text-xs mt-1 leading-snug">{sub}</p>}
+      </div>
+      {onClick && <span className="text-faint pt-0.5 shrink-0">→</span>}
+    </Tag>
+  );
+}
+
+function PmItemButton({ i, onOpenItem, clientView, sub, extra }) {
+  return <PmLinkButton onClick={onOpenItem && i.status !== 'proposed' ? () => onOpenItem(i) : null}
+    chip={<PmChip color="#34d399">{PM_KIND[i.kind]}{i.status === 'done' ? ' · done' : ''}</PmChip>}
+    label={pmItemTitle(i)} code={!clientView ? i.code : null} note={!clientView && i.status !== 'active' ? i.status : null} sub={sub} extra={extra} />;
 }
 
 function PmGrowthHistory({ items }) {
@@ -3837,7 +3871,7 @@ function PmPredictionBody({ p, pm, clientView }) {
   );
 }
 
-function PmInterventionBody({ i, pm, clientView }) {
+function PmInterventionBody({ i, pm, clientView, onOpenFinding }) {
   const f = pm.findings.find(x => x.id === i.finding_id);
   return (
     <>
@@ -3845,7 +3879,7 @@ function PmInterventionBody({ i, pm, clientView }) {
       <PmBlock title="What to do"><p>{i.action}</p></PmBlock>
       <PmBlock title="What should improve"><p>{i.intended_benefit}</p></PmBlock>
       <PmBlock title="How we'll know it helped"><p>{i.how_we_know}</p></PmBlock>
-      <PmBasedOn findings={f ? [f] : []} clientView={clientView} />
+      <PmBasedOn findings={f ? [f] : []} clientView={clientView} onOpenFinding={onOpenFinding} />
       <PmBlock title="What happened"><p>{i.result || (i.status === 'active' ? 'Under way. Nothing recorded yet.' : 'Not started.')}</p></PmBlock>
       {!clientView && <PmGrowthHistory items={pm.growthHistoryFor(i.id)} />}
     </>
@@ -4146,7 +4180,7 @@ function PmQuote({ e, data, clientView }) {
   );
 }
 
-function PmFindingBody({ f, pm, data, clientView }) {
+function PmFindingBody({ f, pm, data, clientView, onOpenFinding, onOpenItem }) {
   const ev = pm.evidenceFor(f.id);
   const support = ev.filter(e => !e.is_counter).sort((a, b) => a.session_id.localeCompare(b.session_id));
   const counter = ev.filter(e => e.is_counter);
@@ -4194,14 +4228,12 @@ function PmFindingBody({ f, pm, data, clientView }) {
             {PM_LINK_GROUPS.filter(g => links[g.id].length).map(g => (
               <div key={g.id}>
                 <p className="text-sm font-medium text-[var(--text)] mb-1">{g.title}</p>
-                <ul className="reading text-dim space-y-2" style={{ fontSize: '16px' }}>
+                <div className="space-y-2">
                   {links[g.id].map(({ f: o, why }) => (
-                    <li key={o.id}>
-                      {!clientView && <span className="text-faint text-xs font-mono mr-2">{o.code}</span>}<span className="text-[var(--text)]">{pmHeadline(o)}</span>
-                      <span className="block text-faint text-sm mt-0.5">{why}</span>
-                    </li>
+                    <PmLinkButton key={o.id} onClick={onOpenFinding && (() => onOpenFinding(o))}
+                      label={pmHeadline(o)} code={!clientView ? o.code : null} sub={why} />
                   ))}
-                </ul>
+                </div>
               </div>
             ))}
           </div>
@@ -4240,25 +4272,23 @@ function PmFindingBody({ f, pm, data, clientView }) {
           // Items on connected findings: only live ones (and proposals, for the coach).
           const help = pmHelpFor(pm, f, canSee, i => clientView ? ['active', 'done'].includes(i.status) : ['active', 'done', 'proposed'].includes(i.status));
           if (!ints.length && !preds.length && !help.up.length && !help.down.length && !help.together.length) return <p>Nothing is linked to this yet. Practices and experiments are chosen together in session.</p>;
-          const item = (i) => <><span className="text-[var(--text)]">{PM_KIND[i.kind]}: </span>{i.action}{!clientView && <span className="text-faint text-sm"> ({i.code}, {i.status})</span>}</>;
-          const via = (o) => <span className="block text-faint text-sm mt-0.5">{!clientView && <span className="font-mono mr-1">{o.code}</span>}{pmHeadline(o)}</span>;
+          const item = (i, o, root) => <PmItemButton key={i.id} i={i} onOpenItem={onOpenItem} clientView={clientView}
+            sub={o ? `Through: ${pmHeadline(o)}${!clientView ? ` (${o.code})` : ''}` : null}
+            extra={root ? <span className="text-[10px] uppercase tracking-wider" style={{ color: '#34d399' }}>Closest to the root</span> : null} />;
+          const group = (title, rows) => rows.length > 0 && <div>
+            <p className="text-sm font-medium text-[var(--text)] mb-2">{title}</p>
+            <div className="space-y-2">{rows.map(({ i, via: o, root }) => item(i, o, root))}</div>
+          </div>;
           return <div className="space-y-4">
-            {(ints.length > 0 || preds.length > 0) && <ul className="space-y-2">
-              {ints.map(i => <li key={i.id}>{item(i)}</li>)}
-              {preds.map(p => <li key={p.id}><span className="text-[var(--text)]">Prediction: </span>{p.situation}<span className="text-faint text-sm"> ({p.code}, {p.status})</span></li>)}
-            </ul>}
-            {help.up.length > 0 && <div>
-              <p className="text-sm font-medium text-[var(--text)] mb-1">Works on what may drive this</p>
-              <ul className="space-y-2">{help.up.map(({ i, via: o, root }) => <li key={i.id}>{item(i)}{root && <span className="ml-2 text-[10px] uppercase tracking-wider" style={{ color: '#34d399' }}>Closest to the root</span>}{via(o)}</li>)}</ul>
+            {(ints.length > 0 || preds.length > 0) && <div className="space-y-2">
+              {ints.map(i => item(i))}
+              {preds.map(p => <PmLinkButton key={p.id} chip={<PmChip color="#60a5fa">Prediction</PmChip>} label={p.situation} code={p.code} note={p.status} />)}
             </div>}
-            {help.down.length > 0 && <div>
-              <p className="text-sm font-medium text-[var(--text)] mb-1">Works on where this shows up</p>
-              <ul className="space-y-2">{help.down.map(({ i, via: o }) => <li key={i.id}>{item(i)}{via(o)}</li>)}</ul>
-            </div>}
-            {help.together.length > 0 && <div>
-              <p className="text-sm font-medium text-[var(--text)] mb-1">Works on something that goes with this</p>
-              <ul className="space-y-2">{help.together.map(({ i, via: o }) => <li key={i.id}>{item(i)}{via(o)}</li>)}</ul>
-            </div>}
+            {group('Works on what may drive this', help.up)}
+            {group('Works on where this shows up', help.down)}
+            {group('Works on something that goes with this', help.together)}
+            {!clientView && [...ints, ...help.up.map(h => h.i), ...help.down.map(h => h.i), ...help.together.map(h => h.i)].some(i => i.status === 'proposed') &&
+              <p className="text-faint text-xs">Proposed items open from the Review Queue. Once accepted, they open from here.</p>}
           </div>;
         })()}
       </PmBlock>
@@ -4458,6 +4488,10 @@ function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
   const idx = pages.findIndex(p => p.key === openKey);
   const page = idx >= 0 ? pages[idx] : null;
   const label = (p) => (p.f || p.g) ? `${p.col.title} · ${p.sec.title}${p.of > 1 ? ` (${p.n} of ${p.of})` : ''}` : `${p.col.title} · ${p.sec.title}`;
+  // Buttons on a card open another card, but only one this viewer has a page for.
+  const openIfPage = (k) => pages.some(p => p.key === k) ? () => setOpenKey(k) : null;
+  const openFinding = (f) => { const go = openIfPage(`${pmPlace(f)}/${f.id}`); if (go) go(); };
+  const openItem = (i) => { const go = openIfPage(`growth/${i.kind === 'nudge' ? 'nudges' : 'interventions'}/${i.id}`); if (go) go(); };
   const name = data.profile?.preferredName || (data.profile?.name || '').split(' ')[0];
   const read = pmReadInfo(pm);
   const by = (c) => visible.filter(f => f.confidence === c).length;
@@ -4627,10 +4661,10 @@ function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
             : forceClient && page.f ? <PmRespond key={page.f.id} f={page.f} pm={pm} /> : null}>
           {page.f
             ? <><PmFindingTitle f={page.f} clientView={clientView} color={page.col.color} eyebrow={`${page.col.title} · ${page.sec.title}${page.of > 1 ? ` (${page.n} of ${page.of})` : ''}`} />
-                <PmFindingBody f={page.f} pm={pm} data={data} clientView={clientView} /></>
+                <PmFindingBody f={page.f} pm={pm} data={data} clientView={clientView} onOpenFinding={openFinding} onOpenItem={openItem} /></>
             : page.g
             ? <><PmGrowthTitle g={page.g} type={page.gType} clientView={clientView} color={page.col.color} eyebrow={`${page.col.title} · ${page.sec.title}${page.of > 1 ? ` (${page.n} of ${page.of})` : ''}`} />
-                {page.gType === 'prediction' ? <PmPredictionBody p={page.g} pm={pm} clientView={clientView} /> : <PmInterventionBody i={page.g} pm={pm} clientView={clientView} />}</>
+                {page.gType === 'prediction' ? <PmPredictionBody p={page.g} pm={pm} clientView={clientView} /> : <PmInterventionBody i={page.g} pm={pm} clientView={clientView} onOpenFinding={openFinding} />}</>
             : page.evolution
             ? <><div className="mb-8"><PmEyebrow color={page.col.color}>{page.col.title}</PmEyebrow><h2 className="text-2xl font-bold">{page.sec.title}</h2></div>
                 <PmEvolutionBody entries={page.evolution} clientView={clientView} /></>
