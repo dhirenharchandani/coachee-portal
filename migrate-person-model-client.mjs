@@ -127,7 +127,11 @@ const step = (t) => console.log(`\n--- ${t} ---`);
           WHERE l.coachee_id = cid
             AND EXISTS (SELECT 1 FROM public.pm_findings a WHERE a.id = l.from_id AND a.status IN ('confirmed','disputed'))
             AND EXISTS (SELECT 1 FROM public.pm_findings b WHERE b.id = l.to_id AND b.status IN ('confirmed','disputed'))), '[]'::jsonb),
-        'sessions_read', coalesce((SELECT jsonb_agg(DISTINCT x) FROM public.pm_runs r, unnest(r.sessions_read) x WHERE r.coachee_id = cid), '[]'::jsonb)
+        'sessions_read', coalesce((SELECT jsonb_agg(DISTINCT x) FROM public.pm_runs r, unnest(r.sessions_read) x WHERE r.coachee_id = cid), '[]'::jsonb),
+        -- When the read last changed: a pass, or an edit to a card the client can see. Shown in "About this read".
+        'last_updated', GREATEST(
+          (SELECT max(r.created_at) FROM public.pm_runs r WHERE r.coachee_id = cid),
+          (SELECT max(f.updated_at) FROM public.pm_findings f WHERE f.coachee_id = cid AND f.status IN ('confirmed','disputed')))
       );
     END $$;
   `);

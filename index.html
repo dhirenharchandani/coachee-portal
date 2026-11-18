@@ -4441,6 +4441,61 @@ function PmLegend() {
   );
 }
 
+// "About this read": a side panel the client can open at any time. It repeats what the consent screen said
+// (shown only once), what the read is built from, how to read it, and what their answers do.
+function PmAbout({ open, onClose, read, updated }) {
+  useEffect(() => {
+    if (!open) return;
+    const k = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [open, onClose]);
+  if (!open) return null;
+  const monthYear = (d) => new Date(d + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+  const H = ({ children }) => <h3 className="text-[10px] tracking-[0.2em] uppercase text-faint mb-2">{children}</h3>;
+  const P = ({ children }) => <p className="text-dim reading" style={{ fontSize: '15px' }}>{children}</p>;
+  // Rendered on <body>, so the page's own layers (top bar, fade-in) can't sit over it.
+  return ReactDOM.createPortal(
+    <div className="fixed inset-0" style={{ zIndex: 100, background: 'rgba(8,6,14,0.45)' }} onClick={onClose}>
+      <aside role="dialog" aria-label="About this read" onClick={e => e.stopPropagation()}
+        className="absolute top-0 right-0 bottom-0 overflow-y-auto p-6 md:p-7 space-y-6"
+        style={{ width: 'min(500px, 100vw)', background: 'var(--surface)', borderLeft: '1px solid var(--border)' }}>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-xl font-bold">About this read</h2>
+          <button onClick={onClose} className="surface px-3 py-1.5 rounded-lg text-sm hover:bg-primary-soft">Close</button>
+        </div>
+        <div>
+          <H>What it's based on</H>
+          <P>{read
+            ? <><b className="text-[color:var(--text)]">{read.sessions} sessions</b> with Dhiren, {monthYear(read.first)} to {monthYear(read.last)}. Only what you said in those sessions counts. Summaries and notes don't.</>
+            : 'Your sessions with Dhiren. Only what you said in them counts. Summaries and notes don\'t.'}</P>
+          {updated && <p className="text-faint text-xs mt-2">Last updated {pmDay(updated.slice(0, 10))}.</p>}
+        </div>
+        <div>
+          <H>The three parts</H>
+          <P><b className="text-[color:var(--text)]">My OS</b> describes how you operate: what drives you, how you think and act, your relationships, your strengths and challenges. <b className="text-[color:var(--text)]">My Insights</b> is what you may be learning about yourself. <b className="text-[color:var(--text)]">My Growth</b> is the practical part: nudges, things to practise and experiments, each tied to a pattern.</P>
+        </div>
+        <div>
+          <H>How sure we are</H>
+          <div className="space-y-2">
+            {['solid', 'live', 'thin'].map(c => <div key={c}><PmSure c={c} /><p className="text-faint text-xs mt-0.5">{PM_CONF_HINT[c][0].toUpperCase() + PM_CONF_HINT[c].slice(1)}.</p></div>)}
+          </div>
+          <p className="text-faint text-xs mt-3">Every "Why it happens" is a working explanation, not a conclusion. Each card shows the moments it rests on, in your own words, and where it doesn't hold.</p>
+        </div>
+        <div>
+          <H>Your say</H>
+          <P>On any card you can say it fits, say it doesn't, or correct a fact. Questions have four answers: yes, sometimes, it used to be, or not really. Your answer goes to Dhiren, and the read changes. Nothing changes without Dhiren checking it first.</P>
+        </div>
+        <div>
+          <H>Who can see it</H>
+          <P>Only you and Dhiren. You can download it whenever you like ("Download my read"), and ask for it to be deleted at any time.</P>
+        </div>
+      </aside>
+    </div>,
+    document.body
+  );
+}
+
 // Coach-only: whether this client's own login can open their read. Off by default; the database enforces it.
 function PmClientAccess({ pm, name }) {
   const [busy, setBusy] = useState(false);
@@ -4610,6 +4665,8 @@ function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
   const [openKey, setOpenKey] = useState(null);
   const [layout, setLayout] = useState(() => { try { return localStorage.getItem('pm-read-layout') || 'cards'; } catch { return 'cards'; } });
   const pickLayout = (v) => { setLayout(v); try { localStorage.setItem('pm-read-layout', v); } catch {} };
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const closeAbout = useCallback(() => setAboutOpen(false), []);
   if (pm.status === 'loading' || pm.status === 'idle') return <p className="text-faint text-sm">Loading…</p>;
   if (pm.status === 'error') return <p className="text-secondary text-sm">Couldn't load the model: {pm.error}</p>;
 
@@ -4630,6 +4687,8 @@ function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
   const openItem = (i) => { const go = openIfPage(`growth/${i.kind === 'nudge' ? 'nudges' : 'interventions'}/${i.id}`); if (go) go(); };
   const name = data.profile?.preferredName || (data.profile?.name || '').split(' ')[0];
   const read = pmReadInfo(pm);
+  // The latest change the viewer can see: a pass, or an edit to one of their cards.
+  const updated = [read?.lastRun, ...visible.map(f => f.updated_at)].filter(Boolean).sort().pop() || null;
   const by = (c) => visible.filter(f => f.confidence === c).length;
   const suggestions = growth.nudges.length + growth.interventions.length;
   const forecasts = growth.prediction.filter(p => p.status === 'scored').length;
@@ -4658,14 +4717,20 @@ function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
               {clientView ? 'What we have learned together so far.' : `Confirmed findings, laid out as ${name} sees them.`}
             </p>
           </div>
-          {isCoach && (
-            <button onClick={() => setClientView(!clientView)}
-              className={'px-3 py-1.5 rounded-lg text-sm inline-flex items-center gap-2 shrink-0 ' + (clientView ? 'btn-primary' : 'surface hover:bg-primary-soft')}>
-              <Icon name={clientView ? 'users' : 'lock'} size={15} /> {clientView ? 'Showing as client' : 'Show as client'}
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <button onClick={() => setAboutOpen(true)} className="surface px-3 py-1.5 rounded-lg text-sm inline-flex items-center gap-2 hover:bg-primary-soft">
+              <Icon name="question" size={15} /> About this read
             </button>
-          )}
+            {isCoach && (
+              <button onClick={() => setClientView(!clientView)}
+                className={'px-3 py-1.5 rounded-lg text-sm inline-flex items-center gap-2 ' + (clientView ? 'btn-primary' : 'surface hover:bg-primary-soft')}>
+                <Icon name={clientView ? 'users' : 'lock'} size={15} /> {clientView ? 'Showing as client' : 'Show as client'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
+      <PmAbout open={aboutOpen} onClose={closeAbout} read={read} updated={updated} />
 
       {!clientView && candidates.length + proposalCount > 0 && (
         <div className="grid"><CTACard icon="clipboard" title={`${candidates.length + proposalCount} waiting for your review`}
@@ -4675,9 +4740,9 @@ function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
 
       {!clientView && isCoach && <PmClientAccess pm={pm} name={name} />}
 
-      {/* About this read */}
+      {/* The read in numbers (the fuller explanation is in the "About this read" panel) */}
       <div>
-        <p className="text-[10px] tracking-[0.2em] uppercase text-faint mb-3">About this read</p>
+        <p className="text-[10px] tracking-[0.2em] uppercase text-faint mb-3">Your read in numbers</p>
         <div className="grid gap-3 grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
           {stats.map(([v, l], i) => (
             <div key={l} className="surface rounded-xl px-3 py-4 text-center">
@@ -4908,7 +4973,7 @@ function useClientRead(enabled) {
       findings: r.findings.map(f => ({ ...f, code: '', domains: f.domains || [] })),
       evidence: r.evidence, history: r.history, predictions: r.predictions, interventions: r.interventions,
       links: r.links || [], growthHistory: [], settings: null,
-      runs: [{ sessions_read: r.sessions_read || [], created_at: null }],
+      runs: [{ sessions_read: r.sessions_read || [], created_at: r.last_updated || null }],
       evidenceFor: id => ev[id] || [], historyFor: id => hi[id] || [], growthHistoryFor: () => [],
       respond,
     };
