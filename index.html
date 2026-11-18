@@ -3642,6 +3642,20 @@ function PmTranscriptContext({ evidence }) {
   );
 }
 
+// Status and confidence changes, in the client's words.
+function pmClientHistoryLine(h) {
+  if (h.field === 'confidence') {
+    const lab = (c) => ({ solid: 'Established', live: 'Emerging possibility', thin: 'Question' })[c] || c;
+    return <><strong className="text-[var(--text)]">How sure</strong>: {lab(h.before)} → {lab(h.after)}</>;
+  }
+  const s = h.after, was = h.before;
+  if (s === 'confirmed') return was === 'disputed' ? 'Looked at again after your note, and kept' : 'Checked by Dhiren and added to your read';
+  if (s === 'disputed') return 'You said this isn\'t right. Dhiren is looking at it again';
+  if (s === 'closed') return 'You\'ve changed this. It no longer describes how you operate';
+  if (s === 'retired') return 'Taken out of your read';
+  return 'Updated';
+}
+
 function PmHistory({ items, clientView, findings }) {
   // The client's history starts when the coach confirmed it; drafting before that is review work, not change in them.
   const confirmedAt = items.find(h => h.field === 'status' && h.after === 'confirmed')?.changed_at;
@@ -3661,6 +3675,7 @@ function PmHistory({ items, clientView, findings }) {
           <span className="text-faint text-xs shrink-0 pt-0.5" style={{ minWidth: 86 }}>{pmDate(h.changed_at)}</span>
           <span className="text-dim">
             {h.field === 'created' ? 'First proposed'
+              : clientView && (h.field === 'status' || h.field === 'confidence') ? pmClientHistoryLine(h)
               : clientView && PM_HISTORY_TEXT_FIELDS[h.field] ? <><strong className="text-[var(--text)]">{PM_HISTORY_TEXT_FIELDS[h.field]}</strong>: reworded to fit the evidence</>
               : <><strong className="text-[var(--text)]">{h.field.replace(/_/g, ' ')}</strong>: {fmt(h.before)} → {fmt(h.after)}</>}
             {h.reason && !clientView && <span className="text-faint"> · {h.reason}</span>}
@@ -4658,7 +4673,14 @@ function PmOverview({ data, pm, onNav, isCoach, forceClient }) {
           prev={idx > 0 ? { label: label(pages[idx - 1]), go: () => setOpenKey(pages[idx - 1].key) } : null}
           next={idx < pages.length - 1 ? { label: label(pages[idx + 1]), go: () => setOpenKey(pages[idx + 1].key) } : null}
           footer={page.g && !clientView ? <PmGrowthActions key={page.g.id} g={page.g} type={page.gType} pm={pm} data={data} />
-            : forceClient && page.f ? <PmRespond key={page.f.id} f={page.f} pm={pm} /> : null}>
+            : forceClient && page.f ? <PmRespond key={page.f.id} f={page.f} pm={pm} />
+            : clientView && page.f ? (
+              // The coach previewing the client view sees the same buttons; nothing is sent from here.
+              <div>
+                <p className="text-[11px] text-faint mb-2">Preview: this is what {name || 'the client'} sees on this card. Answers are sent only from {name ? `${name}'s` : 'their'} own login.</p>
+                <PmRespond key={page.f.id} f={page.f} pm={{ ...pm, respond: async () => { throw new Error(`Preview only. ${name || 'The client'} answers from their own login.`); } }} />
+              </div>
+            ) : null}>
           {page.f
             ? <><PmFindingTitle f={page.f} clientView={clientView} color={page.col.color} eyebrow={`${page.col.title} · ${page.sec.title}${page.of > 1 ? ` (${page.n} of ${page.of})` : ''}`} />
                 <PmFindingBody f={page.f} pm={pm} data={data} clientView={clientView} onOpenFinding={openFinding} onOpenItem={openItem} /></>
