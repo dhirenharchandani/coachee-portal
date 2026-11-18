@@ -121,6 +121,12 @@ const step = (t) => console.log(`\n--- ${t} ---`);
             'how_we_know', i.how_we_know, 'result', i.result, 'status', i.status))
           FROM public.pm_interventions i JOIN public.pm_findings f ON f.id = i.finding_id
           WHERE i.coachee_id = cid AND i.status IN ('active','done') AND f.status IN ('confirmed','disputed')), '[]'::jsonb),
+        -- Links only between findings the client can see; the coach's logged reason stays coach-side.
+        'links', coalesce((SELECT jsonb_agg(jsonb_build_object('id', l.id, 'from_id', l.from_id, 'to_id', l.to_id, 'kind', l.kind, 'why', l.why))
+          FROM public.pm_links l
+          WHERE l.coachee_id = cid
+            AND EXISTS (SELECT 1 FROM public.pm_findings a WHERE a.id = l.from_id AND a.status IN ('confirmed','disputed'))
+            AND EXISTS (SELECT 1 FROM public.pm_findings b WHERE b.id = l.to_id AND b.status IN ('confirmed','disputed'))), '[]'::jsonb),
         'sessions_read', coalesce((SELECT jsonb_agg(DISTINCT x) FROM public.pm_runs r, unnest(r.sessions_read) x WHERE r.coachee_id = cid), '[]'::jsonb)
       );
     END $$;
@@ -193,7 +199,7 @@ const step = (t) => console.log(`\n--- ${t} ---`);
   }
 
   step('4. Coach: delete a client\'s read');
-  // Deletes everything in the read (runs, findings with their evidence and history, predictions, interventions,
+  // Deletes everything in the read (runs, findings with their evidence, history and links, predictions, interventions,
   // growth history) in one go, switches the read off, clears consent, and records when. Session transcripts
   // are kept: they are the record of the sessions, not part of the read. Coach logins only.
   await sql(`ALTER TABLE public.pm_client_settings ADD COLUMN IF NOT EXISTS read_deleted_at TIMESTAMPTZ;`);
@@ -207,6 +213,7 @@ const step = (t) => console.log(`\n--- ${t} ---`);
       DELETE FROM public.pm_growth_history WHERE coachee_id = coachee;
       DELETE FROM public.pm_predictions WHERE coachee_id = coachee; GET DIAGNOSTICS np = ROW_COUNT;
       DELETE FROM public.pm_interventions WHERE coachee_id = coachee; GET DIAGNOSTICS ni = ROW_COUNT;
+      DELETE FROM public.pm_links WHERE coachee_id = coachee;
       UPDATE public.pm_findings SET merged_into = NULL WHERE coachee_id = coachee AND merged_into IS NOT NULL;
       DELETE FROM public.pm_findings WHERE coachee_id = coachee; GET DIAGNOSTICS nf = ROW_COUNT;  -- evidence and history cascade
       DELETE FROM public.pm_runs WHERE coachee_id = coachee; GET DIAGNOSTICS nr = ROW_COUNT;

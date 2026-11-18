@@ -3,6 +3,8 @@
 //   <out>/sessions.json                 session list from the dashboard row (id, date, title, hasTranscript)
 //   <out>/findings.json                 existing findings for the target coachee, ALL statuses
 //                                       (rejected ones too, so the same reading is not proposed again)
+//   <out>/links.json                    links between findings: from / to codes, kind (feeds, draws_on, goes_with,
+//                                       pulls_against) and the one-line why
 //   <out>/client-responses.json         the client's own responses on the dashboard, per finding, with
 //                                       which ones the coach has not yet acted on ("open": true). Answers to
 //                                       Questions (yes / sometimes / no) and disputes are handled first in a pass.
@@ -46,6 +48,12 @@ mkdirSync(join(out, 'transcripts'), { recursive: true });
 transcripts.forEach((t, i) => writeFileSync(join(out, 'transcripts', `${String(i + 1).padStart(2, '0')}_${t.session_id}.md`), t.transcript_md));
 writeFileSync(join(out, 'sessions.json'), JSON.stringify(sessions, null, 2));
 writeFileSync(join(out, 'findings.json'), JSON.stringify(findings, null, 2));
+
+const links = await sql(`
+  SELECT a.code AS "from", b.code AS "to", l.kind, l.why FROM public.pm_links l
+  JOIN public.pm_findings a ON a.id = l.from_id JOIN public.pm_findings b ON b.id = l.to_id
+  WHERE l.coachee_id = ${lit(row.id)} ORDER BY a.code, b.code`);
+writeFileSync(join(out, 'links.json'), JSON.stringify(links, null, 2));
 
 // A response is open until the coach acts after it: a coach "noted" entry, or any logged change to the finding.
 const history = await sql(`

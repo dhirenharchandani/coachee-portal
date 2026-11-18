@@ -24,14 +24,22 @@
 //       "set": { "episodes"?, "confidence"?, "counter_evidence"?, "scope"?, "exceptions"?, "statement"?, "mechanism"?,
 //                "alternative"?, "client_headline"?, "client_question"?, "importance"?, "pattern_sequence"?, "domains"?,
 //                "type"?, "lens"?,          // a finding set to type 'loop' needs a full five-step pattern_sequence
-//                "client_undervalues"?, "coach_framed"?, "works_against_aims"?,    // booleans
-//                "related"? },               // codes of connected findings, e.g. ["F-003"]; replaces the list
+//                "client_undervalues"?, "coach_framed"?, "works_against_aims"? },  // booleans
+//                                         // (links between findings go in "links" below, not here)
 //       "merge_into"?: "F-003",           // mark this finding merged into another (coach-approved only). Its evidence
 //                                         // is NOT moved: add what the survivor needs to the survivor's own update
 //       "evidence": [ same shape as above ],  // added to the finding; each quote checked word for word
 //       "remove_evidence": [ { "session_id", "quote" } ]  // quotes taken off this finding (exact stored text); the
 //                                         // removed quotes are named in the logged reason
-//   } ]
+//   } ],
+//   "links": [ {                          // links between EXISTING findings (save new candidates first, then link them)
+//       "from": "F-017", "to": "F-025",
+//       "kind": "feeds|draws_on|goes_with|pulls_against",  // feeds: from may drive to; draws_on: from is a strength for to
+//       "why": "...",                     // one line, to the client as "you"; shown on both cards
+//       "reason": "..."                   // required; logged on both findings
+//   } ],                                  // replaces any existing link between the same two findings
+//   "remove_links": [ { "from": "F-017", "to": "F-025", "reason": "..." } ]
+//   A link that touches a confirmed or disputed finding needs --coach-approved, like an update.
 // }
 
 import { readFileSync } from 'node:fs';
@@ -153,7 +161,7 @@ function gate(f, transcripts, clientNames) {
 
   // Updates to existing findings: same quote checks, but a finding the coach has already acted on is never touched.
   const UPDATABLE = ['episodes', 'confidence', 'counter_evidence', 'scope', 'exceptions', 'statement', 'mechanism', 'alternative',
-    'client_headline', 'client_question', 'importance', 'pattern_sequence', 'domains', 'type', 'lens', 'client_undervalues', 'coach_framed', 'works_against_aims', 'related'];
+    'client_headline', 'client_question', 'importance', 'pattern_sequence', 'domains', 'type', 'lens', 'client_undervalues', 'coach_framed', 'works_against_aims'];
   const BOOLS = ['client_undervalues', 'coach_framed', 'works_against_aims'];
   const TYPES = ['characteristic', 'strength', 'vulnerability', 'self_perception_gap', 'loop', 'connection', 'conflict', 'impact_on_others'];
   const existing = new Map((await sql(`SELECT id, code, status, type, pattern_sequence FROM public.pm_findings WHERE coachee_id = '${coachee.id}'`)).map(r => [r.code, r]));
@@ -177,10 +185,7 @@ function gate(f, transcripts, clientNames) {
       if (LOOP_STEPS.some(st => !seq.map(x => x.step).includes(st))) reasons.push('loop without all five steps');
     }
     for (const k of BOOLS) if (u.set?.[k] !== undefined && typeof u.set[k] !== 'boolean') reasons.push(`${k} must be true or false`);
-    if (u.set?.related !== undefined) {
-      const bad = (Array.isArray(u.set.related) ? u.set.related : [null]).filter(c => !existing.get(c) || c === u.code);
-      if (bad.length) reasons.push(`related: no such other finding ${bad.join(', ')}`);
-    }
+    if (u.set?.related !== undefined) reasons.push('related is retired: put links between findings in "links" (with kind and why)');
     if (u.merge_into) {
       if (!COACH_APPROVED) reasons.push('merge_into needs --coach-approved');
       else if (!existing.get(u.merge_into) || u.merge_into === u.code) reasons.push(`merge_into: no other finding ${u.merge_into}`);
@@ -205,7 +210,29 @@ function gate(f, transcripts, clientNames) {
     else toUpdate.push({ u, row, evidence: ev, removeIds });
   }
 
+  // Links between existing findings.
+  const LINK_KINDS = ['feeds', 'draws_on', 'goes_with', 'pulls_against'];
+  results.links = []; results.link_rejected = [];
+  const toLink = [], toUnlink = [];
+  const owned = (c) => ['confirmed', 'disputed'].includes(existing.get(c)?.status);
+  for (const l of [...(p.links || []).map(l => ({ ...l, op: 'add' })), ...(p.remove_links || []).map(l => ({ ...l, op: 'remove' }))]) {
+    const reasons = [];
+    for (const c of [l.from, l.to]) {
+      const r = existing.get(c);
+      if (!r) reasons.push(`no finding ${c}`);
+      else if (['rejected', 'merged', 'retired'].includes(r.status)) reasons.push(`${c} is ${r.status}`);
+    }
+    if (l.from === l.to) reasons.push('a finding cannot link to itself');
+    if (l.op === 'add' && !LINK_KINDS.includes(l.kind)) reasons.push(`unknown kind ${l.kind}`);
+    if (l.op === 'add' && !String(l.why || '').trim()) reasons.push('missing why');
+    if (!String(l.reason || '').trim()) reasons.push('missing reason');
+    if ((owned(l.from) || owned(l.to)) && !COACH_APPROVED) reasons.push('touches a finding the coach owns (needs --coach-approved)');
+    if (reasons.length) results.link_rejected.push({ link: `${l.from} ${l.op === 'add' ? l.kind : 'x'} ${l.to}`, reasons });
+    else (l.op === 'add' ? toLink : toUnlink).push(l);
+  }
+
   if (DRY) {
+    results.links = [...toLink.map(l => `${l.from} ${l.kind} ${l.to}`), ...toUnlink.map(l => `remove ${l.from} / ${l.to}`)];
     results.accepted = toSave.map(x => ({ headline: x.f.client_headline, quotes: x.evidence.map(e => `${e.session_id} [${e.speaker}] ${norm(e.quote).slice(0, 50)}`) }));
     results.updated = toUpdate.map(x => ({ code: x.u.code, set: Object.keys(x.u.set || {}), merge_into: x.u.merge_into, removes: x.removeIds.length, quotes: x.evidence.map(e => `${e.session_id} [${e.speaker}${e.is_counter ? ', counter' : ''}] ${norm(e.quote).slice(0, 50)}`) }));
     console.log(JSON.stringify({ dry: true, ...results }, null, 2));
@@ -272,6 +299,21 @@ function gate(f, transcripts, clientNames) {
     if (removeIds.length) await sql(`DELETE FROM public.pm_evidence WHERE finding_id = '${row.id}' AND id IN (${removeIds.map(i => `'${i}'`).join(', ')})`);
     for (const e of evidence) await insertEvidence(row.id, e);
     results.updated.push({ code: u.code, fields: Object.keys(set), quotes_added: evidence.length, quotes_removed: removeIds.length });
+  }
+  const linkReason = (l) => (owned(l.from) || owned(l.to)) ? `${l.reason} (approved by the coach; Claude, ${p.run?.kind || 'manual'})` : `${l.reason} (Claude, ${p.run?.kind || 'manual'})`;
+  for (const l of toUnlink) {
+    const a = existing.get(l.from).id, b = existing.get(l.to).id;
+    // Set the reason first so the removal is logged with it.
+    await sql(`UPDATE public.pm_links SET reason = (${J([linkReason(l)])}->>0) WHERE LEAST(from_id, to_id) = LEAST('${a}'::uuid, '${b}'::uuid) AND GREATEST(from_id, to_id) = GREATEST('${a}'::uuid, '${b}'::uuid)`);
+    await sql(`DELETE FROM public.pm_links WHERE LEAST(from_id, to_id) = LEAST('${a}'::uuid, '${b}'::uuid) AND GREATEST(from_id, to_id) = GREATEST('${a}'::uuid, '${b}'::uuid)`);
+    results.links.push(`removed ${l.from} / ${l.to}`);
+  }
+  for (const l of toLink) {
+    await sql(`INSERT INTO public.pm_links (coachee_id, from_id, to_id, kind, why, reason)
+      SELECT '${coachee.id}', '${existing.get(l.from).id}', '${existing.get(l.to).id}', x->>'kind', x->>'why', x->>'reason' FROM (SELECT ${J({ kind: l.kind, why: l.why, reason: linkReason(l) })} AS x) s
+      ON CONFLICT ((LEAST(from_id, to_id)), (GREATEST(from_id, to_id))) DO UPDATE SET from_id = EXCLUDED.from_id, to_id = EXCLUDED.to_id,
+        kind = EXCLUDED.kind, why = EXCLUDED.why, reason = EXCLUDED.reason`);
+    results.links.push(`${l.from} ${l.kind} ${l.to}`);
   }
   console.log(JSON.stringify({ run: runId, ...results }, null, 2));
 })().catch(e => { console.error(e.message); process.exit(1); });

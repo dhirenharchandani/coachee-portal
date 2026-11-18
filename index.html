@@ -3424,20 +3424,20 @@ const PM_SECTIONS = {
 };
 
 function usePersonModel(coacheeId, enabled) {
-  const [state, setState] = useState({ status: 'idle', findings: [], evidence: [], history: [], predictions: [], interventions: [], growthHistory: [], runs: [], settings: null, error: null });
+  const [state, setState] = useState({ status: 'idle', findings: [], evidence: [], history: [], predictions: [], interventions: [], growthHistory: [], runs: [], links: [], settings: null, error: null });
   const mock = useRef(null);
   const load = useCallback(async () => {
     if (enabled && MOCK_COACH) {
       if (!mock.current) {
         const r = await fetch(`data/_preview/${MOCK_FOLDER}.pm.json?t=${Date.now()}`);
         mock.current = r.ok ? await r.json() : { findings: [], evidence: [], history: [], transcripts: {} };
-        for (const k of ['predictions', 'interventions', 'growth_history', 'runs']) mock.current[k] = mock.current[k] || [];
+        for (const k of ['predictions', 'interventions', 'growth_history', 'runs', 'links']) mock.current[k] = mock.current[k] || [];
         mock.current.settings = mock.current.settings || null;
         window.__pmMock = mock.current;
       }
       const m = mock.current;
       setState({ status: 'ready', findings: [...m.findings], evidence: [...m.evidence], history: [...m.history],
-        predictions: [...m.predictions], interventions: [...m.interventions], growthHistory: [...m.growth_history], runs: [...m.runs], settings: m.settings, error: null });
+        predictions: [...m.predictions], interventions: [...m.interventions], growthHistory: [...m.growth_history], runs: [...m.runs], links: [...m.links], settings: m.settings, error: null });
       return;
     }
     if (!enabled || !sb || !coacheeId) return;
@@ -3454,16 +3454,17 @@ function usePersonModel(coacheeId, enabled) {
       if (ev.error || hi.error) { setState(s => ({ ...s, status: 'error', error: (ev.error || hi.error).message })); return; }
       evidence = ev.data || []; history = hi.data || [];
     }
-    const [pr, iv, gh, ru, cs] = await Promise.all([
+    const [pr, iv, gh, ru, cs, lk] = await Promise.all([
       sb.from('pm_predictions').select('*').eq('coachee_id', coacheeId).order('code'),
       sb.from('pm_interventions').select('*').eq('coachee_id', coacheeId).order('code'),
       sb.from('pm_growth_history').select('*').eq('coachee_id', coacheeId).order('changed_at'),
       sb.from('pm_runs').select('id, kind, sessions_read, created_at').eq('coachee_id', coacheeId).order('created_at'),
       sb.from('pm_client_settings').select('*').eq('coachee_id', coacheeId).maybeSingle(),
+      sb.from('pm_links').select('*').eq('coachee_id', coacheeId),
     ]);
     // Growth tables may not exist yet on an older database; the rest of the model still loads.
     setState({ status: 'ready', findings: findings || [], evidence, history,
-      predictions: pr.data || [], interventions: iv.data || [], growthHistory: gh.data || [], runs: ru.data || [], settings: cs.data || null, error: null });
+      predictions: pr.data || [], interventions: iv.data || [], growthHistory: gh.data || [], runs: ru.data || [], links: lk.data || [], settings: cs.data || null, error: null });
   }, [coacheeId, enabled]);
   useEffect(() => { load(); }, [load]);
 
@@ -4013,6 +4014,71 @@ function PmGrowthReviewActions({ g, type, pm, onDone }) {
 function PmEyebrow({ children, color }) {
   return <p className="text-[10px] tracking-[0.2em] uppercase mb-2" style={{ color: color || 'var(--text-faint)' }}>{children}</p>;
 }
+// Links between findings, grouped from this finding's side. Direction is a working explanation, not a proven cause.
+const PM_LINK_GROUPS = [
+  { id: 'drivers', title: 'What may drive this' },
+  { id: 'effects', title: 'What this may lead to' },
+  { id: 'strengths', title: 'Strengths you can draw on' },
+  { id: 'helps', title: 'A strength for' },
+  { id: 'together', title: 'Tends to go with' },
+  { id: 'against', title: 'Pulls against' },
+];
+function pmLinkGroups(pm, f, canSee) {
+  const out = Object.fromEntries(PM_LINK_GROUPS.map(g => [g.id, []]));
+  for (const l of pm.links || []) {
+    if (l.from_id !== f.id && l.to_id !== f.id) continue;
+    const mine = l.from_id === f.id;
+    const other = (pm.findings || []).find(x => x.id === (mine ? l.to_id : l.from_id));
+    if (!other || !canSee(other)) continue;
+    const g = l.kind === 'feeds' ? (mine ? 'effects' : 'drivers') : l.kind === 'draws_on' ? (mine ? 'helps' : 'strengths')
+      : l.kind === 'goes_with' ? 'together' : 'against';
+    out[g].push({ f: other, why: l.why });
+  }
+  return out;
+}
+// Growth items that work on this finding: its own, then those on what may drive it (followed upstream
+// a few steps), then those on where it shows up (one step down), then those on findings that go with it.
+// The one furthest upstream is marked as closest to the root.
+function pmHelpFor(pm, f, canSee, itemOk) {
+  const items = (fid) => (pm.interventions || []).filter(i => i.finding_id === fid && itemOk(i));
+  const own = items(f.id).map(i => ({ i, via: null, depth: 0 }));
+  const up = [], seen = new Set([f.id]);
+  let frontier = [f.id];
+  for (let depth = 1; depth <= 3 && frontier.length; depth++) {
+    const next = [];
+    for (const id of frontier) {
+      for (const l of (pm.links || []).filter(l => l.kind === 'feeds' && l.to_id === id && !seen.has(l.from_id))) {
+        const src = (pm.findings || []).find(x => x.id === l.from_id);
+        seen.add(l.from_id);
+        if (!src || !canSee(src)) continue;
+        next.push(src.id);
+        items(src.id).forEach(i => up.push({ i, via: src, depth }));
+      }
+    }
+    frontier = next;
+  }
+  const down = [];
+  for (const l of (pm.links || []).filter(l => l.kind === 'feeds' && l.from_id === f.id && !seen.has(l.to_id))) {
+    const o = (pm.findings || []).find(x => x.id === l.to_id);
+    seen.add(l.to_id);
+    if (o && canSee(o)) items(o.id).forEach(i => down.push({ i, via: o }));
+  }
+  const together = [];
+  for (const l of (pm.links || []).filter(l => l.kind === 'goes_with' && (l.from_id === f.id || l.to_id === f.id))) {
+    const o = (pm.findings || []).find(x => x.id === (l.from_id === f.id ? l.to_id : l.from_id));
+    if (o && canSee(o) && !seen.has(o.id)) items(o.id).forEach(i => together.push({ i, via: o }));
+  }
+  // "Closest to the root": the upstream finding furthest away, then the one that may feed the most others.
+  // Shown only when one finding clearly wins; a tie would mark several and say nothing.
+  const outs = (id) => (pm.links || []).filter(l => l.kind === 'feeds' && l.from_id === id).length;
+  const score = (x) => x.depth * 100 + outs(x.via.id);
+  const viaIds = [...new Set(up.map(x => x.via.id))];
+  const best = Math.max(0, ...up.map(score));
+  const winners = new Set(up.filter(x => score(x) === best).map(x => x.via.id));
+  const mark = viaIds.length > 1 && winners.size === 1;
+  return { own, up: up.sort((a, b) => score(b) - score(a)).map(x => ({ ...x, root: mark && winners.has(x.via.id) })), down, together };
+}
+
 function PmBlock({ title, children }) {
   if (!children) return null;
   return (
@@ -4079,8 +4145,9 @@ function PmFindingBody({ f, pm, data, clientView }) {
   const sessions = new Set(support.map(e => e.session_id)).size;
   const seq = Array.isArray(f.pattern_sequence) ? f.pattern_sequence : [];
   const result = seq.find(s => s.step === 'consequence');
-  const related = (f.related || []).map(id => (pm.findings || []).find(x => x.id === id))
-    .filter(x => x && (clientView ? ['confirmed', 'disputed'].includes(x.status) : !['rejected', 'merged', 'retired'].includes(x.status)));
+  const canSee = (x) => clientView ? ['confirmed', 'disputed'].includes(x.status) : !['rejected', 'merged', 'retired'].includes(x.status);
+  const links = pmLinkGroups(pm, f, canSee);
+  const anyLinks = PM_LINK_GROUPS.some(g => links[g.id].length);
   return (
     <>
       <PmBlock title="What happens">
@@ -4112,12 +4179,25 @@ function PmFindingBody({ f, pm, data, clientView }) {
       </PmBlock>
 
       {/* Links between findings. Only findings this viewer can see are listed (the client read sends only theirs). */}
-      {related.length > 0 && (
+      {anyLinks && (
         <section className="mb-7">
-          <PmEyebrow>Connected to</PmEyebrow>
-          <ul className="reading text-dim space-y-1" style={{ fontSize: '16px' }}>
-            {related.map(r => <li key={r.id}>{!clientView && <span className="text-faint text-xs font-mono mr-2">{r.code}</span>}{r.client_headline}</li>)}
-          </ul>
+          <PmEyebrow>How it connects</PmEyebrow>
+          <div className="space-y-4">
+            {PM_LINK_GROUPS.filter(g => links[g.id].length).map(g => (
+              <div key={g.id}>
+                <p className="text-sm font-medium text-[var(--text)] mb-1">{g.title}</p>
+                <ul className="reading text-dim space-y-2" style={{ fontSize: '16px' }}>
+                  {links[g.id].map(({ f: o, why }) => (
+                    <li key={o.id}>
+                      {!clientView && <span className="text-faint text-xs font-mono mr-2">{o.code}</span>}<span className="text-[var(--text)]">{pmHeadline(o)}</span>
+                      <span className="block text-faint text-sm mt-0.5">{why}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+          {(links.drivers.length > 0 || links.effects.length > 0) && <p className="text-faint text-xs mt-3">"May drive" is a working explanation, not a proven cause. It firms up as predictions and experiments test it.</p>}
         </section>
       )}
 
@@ -4149,11 +4229,29 @@ function PmFindingBody({ f, pm, data, clientView }) {
         {(() => {
           const ints = pm.interventions.filter(i => i.finding_id === f.id && (clientView ? ['active', 'done'].includes(i.status) : i.status !== 'rejected'));
           const preds = clientView ? [] : pm.predictions.filter(p => (p.finding_ids || []).includes(f.id) && p.status !== 'rejected');
-          if (!ints.length && !preds.length) return <p>Nothing is linked to this yet. Practices and experiments are chosen together in session.</p>;
-          return <ul className="space-y-2">
-            {ints.map(i => <li key={i.id}><span className="text-[var(--text)]">{PM_KIND[i.kind]}: </span>{i.action}{!clientView && <span className="text-faint text-sm"> ({i.code}, {i.status})</span>}</li>)}
-            {preds.map(p => <li key={p.id}><span className="text-[var(--text)]">Prediction: </span>{p.situation}<span className="text-faint text-sm"> ({p.code}, {p.status})</span></li>)}
-          </ul>;
+          // Items on connected findings: only live ones (and proposals, for the coach).
+          const help = pmHelpFor(pm, f, canSee, i => clientView ? ['active', 'done'].includes(i.status) : ['active', 'done', 'proposed'].includes(i.status));
+          if (!ints.length && !preds.length && !help.up.length && !help.down.length && !help.together.length) return <p>Nothing is linked to this yet. Practices and experiments are chosen together in session.</p>;
+          const item = (i) => <><span className="text-[var(--text)]">{PM_KIND[i.kind]}: </span>{i.action}{!clientView && <span className="text-faint text-sm"> ({i.code}, {i.status})</span>}</>;
+          const via = (o) => <span className="block text-faint text-sm mt-0.5">{!clientView && <span className="font-mono mr-1">{o.code}</span>}{pmHeadline(o)}</span>;
+          return <div className="space-y-4">
+            {(ints.length > 0 || preds.length > 0) && <ul className="space-y-2">
+              {ints.map(i => <li key={i.id}>{item(i)}</li>)}
+              {preds.map(p => <li key={p.id}><span className="text-[var(--text)]">Prediction: </span>{p.situation}<span className="text-faint text-sm"> ({p.code}, {p.status})</span></li>)}
+            </ul>}
+            {help.up.length > 0 && <div>
+              <p className="text-sm font-medium text-[var(--text)] mb-1">Works on what may drive this</p>
+              <ul className="space-y-2">{help.up.map(({ i, via: o, root }) => <li key={i.id}>{item(i)}{root && <span className="ml-2 text-[10px] uppercase tracking-wider" style={{ color: '#34d399' }}>Closest to the root</span>}{via(o)}</li>)}</ul>
+            </div>}
+            {help.down.length > 0 && <div>
+              <p className="text-sm font-medium text-[var(--text)] mb-1">Works on where this shows up</p>
+              <ul className="space-y-2">{help.down.map(({ i, via: o }) => <li key={i.id}>{item(i)}{via(o)}</li>)}</ul>
+            </div>}
+            {help.together.length > 0 && <div>
+              <p className="text-sm font-medium text-[var(--text)] mb-1">Works on something that goes with this</p>
+              <ul className="space-y-2">{help.together.map(({ i, via: o }) => <li key={i.id}>{item(i)}{via(o)}</li>)}</ul>
+            </div>}
+          </div>;
         })()}
       </PmBlock>
 
@@ -4556,6 +4654,7 @@ function pmMockClientRead(m, st) {
       .map(h => ({ id: h.id, finding_id: h.finding_id, changed_at: h.changed_at, field: h.field, before: ['confidence', 'status'].includes(h.field) ? h.before : null, after: ['confidence', 'status'].includes(h.field) ? h.after : null })),
     predictions: m.predictions.filter(p => p.shared_with_client && ['open', 'scored'].includes(p.status) && p.finding_ids.every(id => ids.has(id))),
     interventions: m.interventions.filter(i => ['active', 'done'].includes(i.status) && ids.has(i.finding_id)),
+    links: (m.links || []).filter(l => ids.has(l.from_id) && ids.has(l.to_id)).map(l => ({ id: l.id, from_id: l.from_id, to_id: l.to_id, kind: l.kind, why: l.why })),
     sessions_read: [...new Set(m.runs.flatMap(r => r.sessions_read || []))],
   };
 }
@@ -4612,7 +4711,7 @@ function useClientRead(enabled) {
       status: 'ready', error: null,
       findings: r.findings.map(f => ({ ...f, code: '', domains: f.domains || [] })),
       evidence: r.evidence, history: r.history, predictions: r.predictions, interventions: r.interventions,
-      growthHistory: [], settings: null,
+      links: r.links || [], growthHistory: [], settings: null,
       runs: [{ sessions_read: r.sessions_read || [], created_at: null }],
       evidenceFor: id => ev[id] || [], historyFor: id => hi[id] || [], growthHistoryFor: () => [],
       respond,
