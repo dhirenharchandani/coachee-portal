@@ -4821,10 +4821,10 @@ function PmConsent({ name, cr }) {
 
 // The client's response to one finding: agree, say it doesn't fit, or correct a fact.
 const PM_RESPONSE_WORDS = { agree: 'You said this fits', dispute: 'You said this doesn\'t fit', correct: 'You corrected a fact',
-  yes: 'You answered: yes, that\'s me', sometimes: 'You answered: sometimes', no: 'You answered: not really', noted: 'Dhiren read the answer' };
+  yes: 'You answered: yes, that\'s me', sometimes: 'You answered: sometimes', used_to: 'You answered: it used to be, not now', no: 'You answered: not really', noted: 'Dhiren read the answer' };
 // Answers to a Question (a Thin finding). They are filed for the coach and don't put the finding under review.
-const PM_ANSWER_KINDS = ['yes', 'sometimes', 'no'];
-const PM_ANSWER_LABELS = { yes: 'Yes, that\'s me', sometimes: 'Sometimes', no: 'Not really' };
+const PM_ANSWER_KINDS = ['yes', 'sometimes', 'used_to', 'no'];
+const PM_ANSWER_LABELS = { yes: 'Yes, that\'s me', sometimes: 'Sometimes', used_to: 'It used to be', no: 'Not really' };
 function PmRespond({ f, pm }) {
   if (f.confidence === 'thin' && f.status !== 'disputed') return <PmAnswer f={f} pm={pm} />;
   return <PmRespondButtons f={f} pm={pm} />;
@@ -4848,7 +4848,7 @@ function PmAnswer({ f, pm }) {
       {pick && (
         <div className="mb-3 flex gap-2 flex-wrap">
           <textarea autoFocus className="input flex-1" rows={2} style={{ minWidth: 220 }} value={note} onChange={e => setNote(e.target.value)}
-            placeholder={pick === 'no' ? 'What happens instead? (optional)' : 'When does it happen, or not? An example helps. (optional)'} />
+            placeholder={pick === 'no' ? 'What happens instead? (optional)' : pick === 'used_to' ? 'What changed, and roughly when? (optional)' : 'When does it happen, or not? An example helps. (optional)'} />
           <button disabled={busy} onClick={send} className="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Send to Dhiren</button>
         </div>
       )}

@@ -171,14 +171,14 @@ const step = (t) => console.log(`\n--- ${t} ---`);
   `);
   // Agree / dispute / correct (framework: "Challenge or correct"). A dispute or correction puts the finding
   // under review; it stays visible, marked as such. The response is filed on the finding as evidence for the coach.
-  // Yes / sometimes / no answer a Question (a Thin finding): filed the same way, with no change of status,
+  // Yes / sometimes / used to / no answer a Question (a Thin finding): filed the same way, with no change of status,
   // because an answer is information, not an objection. The note is optional for an answer.
   await sql(`
     CREATE OR REPLACE FUNCTION public.pm_client_respond(finding UUID, kind TEXT, note TEXT) RETURNS jsonb
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
     DECLARE cid UUID := public.pm_client_row(); st TEXT;
     BEGIN
-      IF kind NOT IN ('agree','dispute','correct','yes','sometimes','no') THEN RAISE EXCEPTION 'Unknown response'; END IF;
+      IF kind NOT IN ('agree','dispute','correct','yes','sometimes','used_to','no') THEN RAISE EXCEPTION 'Unknown response'; END IF;
       IF kind IN ('dispute','correct') AND char_length(trim(coalesce(note, ''))) = 0 THEN RAISE EXCEPTION 'Please say what does not fit'; END IF;
       IF NOT EXISTS (SELECT 1 FROM public.pm_client_settings WHERE coachee_id = cid AND consent_at IS NOT NULL) THEN RAISE EXCEPTION 'Your read is not available'; END IF;
       SELECT status INTO st FROM public.pm_findings WHERE id = finding AND coachee_id = cid;
@@ -188,7 +188,8 @@ const step = (t) => console.log(`\n--- ${t} ---`);
         status = CASE WHEN kind IN ('dispute','correct') THEN 'disputed' ELSE status END,
         last_change_reason = CASE kind WHEN 'agree' THEN 'Client agreed' WHEN 'dispute' THEN 'Client said this does not fit'
           WHEN 'correct' THEN 'Client corrected a fact' WHEN 'yes' THEN 'Client answered the question: yes'
-          WHEN 'sometimes' THEN 'Client answered the question: sometimes' ELSE 'Client answered the question: not really' END
+          WHEN 'sometimes' THEN 'Client answered the question: sometimes'
+          WHEN 'used_to' THEN 'Client answered the question: it used to be, not now' ELSE 'Client answered the question: not really' END
       WHERE id = finding;
       RETURN jsonb_build_object('ok', true);
     END $$;

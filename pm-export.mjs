@@ -7,7 +7,7 @@
 //                                       pulls_against) and the one-line why
 //   <out>/client-responses.json         the client's own responses on the dashboard, per finding, with
 //                                       which ones the coach has not yet acted on ("open": true). Answers to
-//                                       Questions (yes / sometimes / no) and disputes are handled first in a pass.
+//                                       Questions (yes / sometimes / used to / no) and disputes are handled first in a pass.
 //
 // Usage: SUPABASE_ACCESS_TOKEN=<pat> node pm-export.mjs <sourceFolder> <targetFolder> <outDir>
 // e.g.   node pm-export.mjs olivia olivia-lab ~/tmp/pm-olivia
