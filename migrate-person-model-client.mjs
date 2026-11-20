@@ -69,7 +69,10 @@ const step = (t) => console.log(`\n--- ${t} ---`);
     BEGIN
       IF em = '' THEN RETURN jsonb_build_object('available', false); END IF;
       SELECT c.id INTO cid FROM public.coachees c
-        WHERE lower(c.email) = em OR em IN (SELECT lower(unnest(c.email_aliases))) LIMIT 1;
+        WHERE lower(c.email) = em OR em IN (SELECT lower(unnest(c.email_aliases)))
+        -- Someone on several boards gets the one whose read is switched on.
+        ORDER BY EXISTS (SELECT 1 FROM public.pm_client_settings ps WHERE ps.coachee_id = c.id AND ps.visible) DESC, c.folder
+        LIMIT 1;
       IF cid IS NULL THEN RETURN jsonb_build_object('available', false); END IF;
       SELECT * INTO s FROM public.pm_client_settings WHERE coachee_id = cid;
       IF s IS NULL OR NOT s.visible THEN RETURN jsonb_build_object('available', false); END IF;
@@ -146,7 +149,10 @@ const step = (t) => console.log(`\n--- ${t} ---`);
     DECLARE cid UUID; em TEXT := lower(coalesce(auth.email(), ''));
     BEGIN
       IF em = '' THEN RAISE EXCEPTION 'Not signed in'; END IF;
-      SELECT c.id INTO cid FROM public.coachees c WHERE lower(c.email) = em OR em IN (SELECT lower(unnest(c.email_aliases))) LIMIT 1;
+      SELECT c.id INTO cid FROM public.coachees c WHERE lower(c.email) = em OR em IN (SELECT lower(unnest(c.email_aliases)))
+        -- Someone on several boards gets the one whose read is switched on.
+        ORDER BY EXISTS (SELECT 1 FROM public.pm_client_settings ps WHERE ps.coachee_id = c.id AND ps.visible) DESC, c.folder
+        LIMIT 1;
       IF cid IS NULL OR NOT EXISTS (SELECT 1 FROM public.pm_client_settings WHERE coachee_id = cid AND visible) THEN
         RAISE EXCEPTION 'Your read is not available';
       END IF;
