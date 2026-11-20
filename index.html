@@ -4594,7 +4594,7 @@ function PmMap({ pm, findings, clientView, onOpen, growthCount }) {
   cols.forEach((list, c) => list.forEach((f, i) => at.set(f.id, { x: PAD + c * (W + GX), y: PAD + 26 + i * (H + GY) })));
   const width = PAD * 2 + cols.length * W + (cols.length - 1) * GX;
   const height = PAD * 2 + 26 + Math.max(...cols.map(c => c.length)) * (H + GY);
-  const strengthCol = cols[0].every(f => L.some(l => l.kind === 'draws_on' && l.from_id === f.id) && !L.some(l => l.kind === 'feeds' && (l.from_id === f.id || l.to_id === f.id)));
+  const strengthCol = cols.length > 0 && cols[0].every(f =>L.some(l => l.kind === 'draws_on' && l.from_id === f.id) && !L.some(l => l.kind === 'feeds' && (l.from_id === f.id || l.to_id === f.id)));
   const colTitle = (list, c) => strengthCol && c === 0 ? 'Strengths to draw on' : c === (strengthCol ? 1 : 0) ? 'Where a chain starts' : c === (strengthCol ? 2 : 1) ? 'What it may lead to' : 'Further along';
   const near = hover ? new Set([hover, ...L.filter(l => l.from_id === hover || l.to_id === hover).map(l => l.from_id === hover ? l.to_id : l.from_id)]) : null;
   const placeOf = (f) => PM_COLUMNS.find(c => pmPlace(f).startsWith(c.id + '/')) || PM_COLUMNS[0];
