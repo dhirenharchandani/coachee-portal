@@ -129,6 +129,16 @@
   .fade-in { animation: fadeIn 0.25s ease; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
+  /* Evolution Arc cards: quarter summaries range from ~25 to ~5,700 characters, and a grid row
+     stretches to its tallest card. Clamp every card to the same few lines; the full text opens
+     in the reader. */
+  .arc-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; overflow: hidden; }
+  .arc-card { display: flex; flex-direction: column; text-align: left; width: 100%; }
+  .arc-card .arc-body { flex: 1 1 auto; }
+  button.arc-card { cursor: pointer; transition: border-color .15s ease, transform .15s ease; }
+  button.arc-card:hover { transform: translateY(-1px); }
+  button.arc-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
   /* Search overlay */
   .search-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 50; display: flex; align-items: flex-start; justify-content: center; padding-top: 10vh; }
   body[data-theme="light"] .search-backdrop { background: rgba(0,0,0,0.3); }
@@ -1174,6 +1184,76 @@ function EditableYearWord({ value, onSave }) {
   );
 }
 
+// Evolution Arc. Quarter summaries run from a single line to several thousand characters, so the
+// cards are clamped to a uniform height and the full quarter opens in the reader (Esc, ← →).
+const ARC_CLAMP_CHARS = 260;
+
+// Cut at a word boundary. The CSS clamp tidies the last line; this keeps the other few thousand
+// characters out of the DOM entirely, so they are not read aloud or hit by in-page search.
+function arcTeaser(s) {
+  const cut = s.slice(0, ARC_CLAMP_CHARS);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > ARC_CLAMP_CHARS * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:.—-]+$/, '') + '…';
+}
+
+function EvolutionArc({ arcs, heading }) {
+  const [openId, setOpenId] = useState(null);
+  const i = arcs.findIndex(a => a.id === openId);
+  const open = i >= 0 ? arcs[i] : null;
+  const go = d => () => setOpenId(arcs[i + d].id);
+
+  return (
+    <div>
+      <SectionHeading sub="The shape of the journey, quarter by quarter.">{heading}</SectionHeading>
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        {arcs.map(arc => {
+          const summary = arc.summary || '';
+          const long = summary.length > ARC_CLAMP_CHARS;
+          const inner = (
+            <React.Fragment>
+              <p className="text-xs font-semibold mb-1" style={{ color: arc.color }}>{arc.label}</p>
+              <p className="font-bold text-sm mb-2">{arc.title}</p>
+              <div className="arc-body">
+                <p className={'text-faint text-xs leading-relaxed' + (long ? ' arc-clamp' : '')}>{long ? arcTeaser(summary) : summary}</p>
+              </div>
+              <p className="text-faint text-[11px] mt-2">
+                {arc.sessionCount} session{arc.sessionCount !== 1 ? 's' : ''}
+                {long && <span className="ml-2" style={{ color: arc.color }}>Read the quarter →</span>}
+              </p>
+            </React.Fragment>
+          );
+          return long ? (
+            <button key={arc.id} type="button" onClick={() => setOpenId(arc.id)}
+              aria-label={`Read the full summary for ${arc.label} — ${arc.title}`}
+              className="surface rounded-xl p-4 arc-card" style={{ borderTop: `2px solid ${arc.color}` }}>
+              {inner}
+            </button>
+          ) : (
+            <div key={arc.id} className="surface rounded-xl p-4 arc-card" style={{ borderTop: `2px solid ${arc.color}` }}>
+              {inner}
+            </div>
+          );
+        })}
+      </div>
+
+      {open && (
+        <PmReader
+          crumbs={['Evolution Arc', open.label]}
+          accent={open.color}
+          onClose={() => setOpenId(null)}
+          prev={i > 0 ? { label: arcs[i - 1].label, go: go(-1) } : null}
+          next={i < arcs.length - 1 ? { label: arcs[i + 1].label, go: go(1) } : null}
+        >
+          <p className="text-xs font-semibold mb-2" style={{ color: open.color }}>{open.label}</p>
+          <h2 className="text-2xl font-bold leading-snug mb-1">{open.title}</h2>
+          <p className="text-faint text-xs mb-6">{open.sessionCount} session{open.sessionCount !== 1 ? 's' : ''}</p>
+          <Markdown source={open.summary || ''} />
+        </PmReader>
+      )}
+    </div>
+  );
+}
+
 function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCoach, readAvailable, readConsented }) {
   const lastSession = useMemo(() => [...data.sessions].reverse().find(s => s.summaryMd && !s.summaryMd.startsWith('_No recap')), [data]);
   // Dual-company support: when data.companies is set, each company has its own engagement / evolutionArc / scorecard / nextQuarter.
@@ -1327,19 +1407,7 @@ function OverviewView({ data, onNav, actionItems, updateProfileField, prep, isCo
 
       {/* Evolution Arc (per company) */}
       {companies.map((c, ci) => (c.evolutionArc && c.evolutionArc.length > 0) && (
-        <div key={`arc-${ci}`}>
-          <SectionHeading sub="The shape of the journey, quarter by quarter.">{labelFor(c, 'Evolution Arc')}</SectionHeading>
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-            {c.evolutionArc.map(arc => (
-              <div key={arc.id} className="surface rounded-xl p-4" style={{ borderTop: `2px solid ${arc.color}` }}>
-                <p className="text-xs font-semibold mb-1" style={{ color: arc.color }}>{arc.label}</p>
-                <p className="font-bold text-sm mb-2">{arc.title}</p>
-                <p className="text-faint text-xs leading-relaxed">{arc.summary}</p>
-                <p className="text-faint text-[11px] mt-2">{arc.sessionCount} session{arc.sessionCount !== 1 ? 's' : ''}</p>
-              </div>
-            ))}
-          </div>
-        </div>
+        <EvolutionArc key={`arc-${ci}`} arcs={c.evolutionArc} heading={labelFor(c, 'Evolution Arc')} />
       ))}
 
       {/* Scorecard Pulse (per company) */}
