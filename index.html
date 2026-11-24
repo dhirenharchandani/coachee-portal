@@ -3757,9 +3757,9 @@ const pmShortDate = (d) => new Date(d + (d.length === 10 ? 'T12:00:00' : '')).to
 function pmGrowth(pm, clientView) {
   const preds = pm.predictions.filter(p => ['open', 'scored'].includes(p.status)
     && (!clientView || (p.shared_with_client && pmFindingsOf(pm, p).every(pmLive))))
-    .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || a.situation_date.localeCompare(b.situation_date));
+    .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || String(a.situation_date || '').localeCompare(String(b.situation_date || '')));
   const ints = pm.interventions.filter(i => ['active', 'done'].includes(i.status) && pmLive(pm.findings.find(f => f.id === i.finding_id)))
-    .sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1) || a.code.localeCompare(b.code));
+    .sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1) || String(a.code || a.id || '').localeCompare(String(b.code || b.id || '')));
   return { prediction: preds, nudges: ints.filter(i => i.kind === 'nudge'), interventions: ints.filter(i => i.kind !== 'nudge'), evolution: pmEvolution(pm) };
 }
 
