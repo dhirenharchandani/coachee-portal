@@ -5520,10 +5520,10 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
     if (seg === 'resource') return 'resources';
     if (seg === 'next') return 'next';
     if (seg === 'financials') return 'financials';
-    if (seg === 'model') return route.split('/')[2] === 'review' ? 'model-review' : 'model-overview';
+    if (seg === 'model') return !isCoach ? 'read' : route.split('/')[2] === 'review' ? 'model-review' : 'model-overview';
     if (!seg) return 'overview';
     return seg;
-  }, [route]);
+  }, [route, isCoach]);
 
   // Render view
   const view = useMemo(() => {
@@ -5549,7 +5549,8 @@ function AppShell({ data, signOut, updateProfileField, updateData, coachees, coa
       return <PmReviewView key={section || 'all'} section={section} data={data} pm={pm} isCoach={isCoach} onNav={go} />;
     }
     if (seg === 'model' && isCoach) return <PmOverview data={data} pm={pm} isCoach={isCoach} onNav={go} />;
-    if (seg === 'read' && !isCoach) return <PmClientRead data={data} cr={clientRead} onNav={go} />;
+    // Clients who follow a coach link (#/model/...) land on their own read instead of a blank page.
+    if ((seg === 'read' || seg === 'model') && !isCoach) return <PmClientRead data={data} cr={clientRead} onNav={go} />;
     if (seg === 'engagement' && isCoach) return <EngagementView onOpen={(folder) => { setActiveFolder(folder); go('/overview'); }} />;
     return <OverviewView data={data} onNav={go} actionItems={actionItems} updateProfileField={updateProfileField} prep={prep} isCoach={isCoach} />;
   }, [route, data, actionItems, priorities, coacheeId, authedEmail, prep, pm, clientRead]);
